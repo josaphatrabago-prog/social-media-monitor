@@ -1,0 +1,27 @@
+{
+  "name": "social-media-monitor",
+  "version": "2.0.0",
+  "description": "Real-time social media brand monitoring and alerting for Facebook, YouTube, TikTok and Instagram",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "demo": "node server.js --mock",
+    "once": "node server.js --once",
+    "test": "node tests/run.js"
+  },
+  "keywords": [
+    "social-listening",
+    "brand-monitoring",
+    "sentiment-analysis",
+    "crisis-detection",
+    "slack-webhook",
+    "web-push"
+  ],
+  "license": "MIT",
+  "dependencies": {}
+}

@@ -1,0 +1,157 @@
+{
+  "$comment": "Runtime configuration. Secrets belong in .env - reference them here as env:VAR_NAME.",
+
+  "companies": [
+    {
+      "id": "cebu-ritehomes",
+      "name": "CEBU RITEHOMES DEVELOPMENT & REALTY CORP.",
+      "aliases": [
+        "CEBU RITEHOMES",
+        "Cebu Rite Homes",
+        "Ritehomes Realty",
+        "Ritehomes"
+      ],
+      "hashtags": ["#Ritehomes", "#CebuRitehomes", "#CebuRiteHomes"],
+      "handles": ["@ritehomes", "@ceburitehomes"],
+      "exclude": []
+    },
+    {
+      "id": "roven-technic",
+      "name": "ROVEN TECHNIC CONSTRUCTION",
+      "aliases": [
+        "ROVEN TECHNIC",
+        "Roven Technic Construction",
+        "Roven Construction"
+      ],
+      "hashtags": ["#RovenTechnic", "#RovenConstruction"],
+      "handles": ["@roventechnic", "@roventechnic_official"],
+      "exclude": []
+    }
+  ],
+
+  "monitoring": {
+    "$comment": "frequency accepts a preset (realtime|1m|5m|15m|1h|12h), a duration (30s, 45m, 2h), a raw number of seconds, or cron:<5-field expression>.",
+    "frequency": "5m",
+    "perPlatform": {},
+    "enabledPlatforms": ["facebook", "youtube", "tiktok", "instagram"],
+    "lookbackMinutes": 120,
+    "maxItemsPerPoll": 50,
+    "mockMode": "auto",
+    "startPaused": false
+  },
+
+  "sentiment": {
+    "positiveThreshold": 1,
+    "negativeThreshold": -1,
+    "extraPositive": [],
+    "extraNegative": []
+  },
+
+  "crisis": {
+    "windowMinutes": 15,
+    "negativeThreshold": 5,
+    "baselineMultiplier": 3,
+    "cooldownMinutes": 30
+  },
+
+  "notifications": {
+    "rateLimit": { "maxPerMinute": 30 },
+
+    "desktop": {
+      "enabled": true,
+      "events": ["mention.negative", "crisis"]
+    },
+
+    "webhooks": [
+      {
+        "name": "Ops Slack",
+        "type": "slack",
+        "url": "env:SLACK_WEBHOOK_URL",
+        "enabled": true,
+        "events": ["mention.negative", "crisis"]
+      },
+      {
+        "name": "Marketing Discord",
+        "type": "discord",
+        "url": "env:DISCORD_WEBHOOK_URL",
+        "enabled": true,
+        "events": ["crisis"]
+      },
+      {
+        "name": "Teams Channel",
+        "type": "teams",
+        "url": "env:TEAMS_WEBHOOK_URL",
+        "enabled": false,
+        "events": ["crisis"]
+      }
+    ],
+
+    "email": {
+      "enabled": false,
+      "from": "env:SMTP_FROM",
+      "to": [],
+      "events": ["crisis"],
+      "smtp": {
+        "host": "env:SMTP_HOST",
+        "port": 465,
+        "secure": true,
+        "user": "env:SMTP_USER",
+        "pass": "env:SMTP_PASS"
+      }
+    }
+  },
+
+  "platforms": {
+    "facebook": {
+      "accessToken": "env:FB_ACCESS_TOKEN",
+      "apiVersion": "v21.0",
+      "pageIds": [],
+      "searchGroups": [],
+      "includeComments": true
+    },
+    "youtube": {
+      "apiKey": "env:YOUTUBE_API_KEY",
+      "includeComments": true,
+      "includeCaptions": false,
+      "commentsPerVideo": 20,
+      "regionCode": "PH",
+      "relevanceLanguage": "en"
+    },
+    "instagram": {
+      "accessToken": "env:IG_ACCESS_TOKEN",
+      "apiVersion": "v21.0",
+      "businessAccountId": "env:IG_BUSINESS_ACCOUNT_ID",
+      "includeComments": true,
+      "trackTaggedMentions": true
+    },
+    "tiktok": {
+      "$comment": "TikTok has no public keyword-search API. Use a provider: apify | rapidapi | tiktok-research.",
+      "provider": "apify",
+      "apifyToken": "env:APIFY_TOKEN",
+      "apifyActor": "clockworks~tiktok-scraper",
+      "rapidApiKey": "env:RAPIDAPI_KEY",
+      "rapidApiHost": "tiktok-scraper7.p.rapidapi.com",
+      "researchToken": "env:TIKTOK_RESEARCH_TOKEN",
+      "includeComments": true,
+      "commentsPerVideo": 15
+    },
+    "aggregator": {
+      "$comment": "Optional cross-platform fallback used when a native connector is unconfigured.",
+      "enabled": false,
+      "provider": "apify",
+      "apifyToken": "env:APIFY_TOKEN",
+      "actors": {}
+    }
+  },
+
+  "storage": {
+    "dataDir": "./data",
+    "maxMentions": 20000,
+    "retentionDays": 90
+  },
+
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3000
+  }
+}
