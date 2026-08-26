@@ -198,12 +198,14 @@ try {
       process.stdout.write(`\n    SUCCESS - both secrets written to ${repo}.\n    Tell Claude to redeploy.\n\n`);
     }
   } else {
+    // The token has to be shown here, otherwise there is nothing to paste.
+    // --set-secrets remains the better route precisely because it avoids this.
     process.stdout.write(
-      '    Run these (or re-run this script with --set-secrets):\n\n' +
+      '    Re-run with --set-secrets to have these written for you, or run:\n\n' +
       `      gh secret set FB_PAGE_IDS --body "${pageIds.join(',')}"\n` +
-      '      gh secret set FB_ACCESS_TOKEN --body "<the Page token above>"\n\n' +
-      '    The Page token is a credential. Prefer --set-secrets so it never\n' +
-      '    lands in your shell history.\n\n'
+      `      gh secret set FB_ACCESS_TOKEN --body "${bestToken}"\n\n` +
+      '    That second line contains a live credential - it will land in your\n' +
+      '    shell history. Prefer --set-secrets, and treat this output as secret.\n\n'
     );
   }
 } catch (error) {
