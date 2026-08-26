@@ -1,241 +1,259 @@
 /**
- * Notifications Engine - Manages Browser Desktop Push Notifications,
- * Webhook dispatches (Slack/Discord/Custom), Audio Alerts, and Toast UI.
+ * Browser-side alerting: desktop notifications, audio chimes and toasts.
+ *
+ * Webhook and email delivery used to live here and now runs on the server.
+ * Two reasons it had to move: Slack's incoming-webhook endpoint sends no CORS
+ * headers, so a browser POST is blocked before it leaves the page, and a
+ * webhook URL is a credential that should never be shipped to a visitor.
+ *
+ * What genuinely belongs in the browser is the part only the browser can do:
+ * the Notification permission and playing a sound.
  */
-import { StorageManager } from './storage.js';
 
-export class NotificationEngine {
+const TOAST_DURATION_MS = 4500;
+const CRISIS_TOAST_DURATION_MS = 9000;
+
+/** Volume ceiling for the alert tones - loud enough to notice, not to startle. */
+const CHIME_GAIN = 0.16;
+const ALARM_GAIN = 0.3;
+
+export class NotificationCenter {
   constructor() {
     this.audioContext = null;
+    this.soundEnabled = true;
+    this.desktopEnabled = false;
+    this.serviceWorker = null;
   }
 
+  /* ---------------------------------------------------------- service worker */
+
   /**
-   * Request native browser push notification permission
+   * Registers the service worker. It is what lets a notification survive the
+   * tab losing focus and carry an action button.
    */
-  async requestPushPermission() {
+  async registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return null;
+
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      this.serviceWorker = registration;
+      return registration;
+    } catch (error) {
+      // Service workers need a secure context: https, or http on localhost.
+      console.warn('service worker registration failed', error.message);
+      return null;
+    }
+  }
+
+  /* ----------------------------------------------------- desktop notifications */
+
+  get permission() {
+    return 'Notification' in window ? Notification.permission : 'unsupported';
+  }
+
+  /** @returns {Promise<{granted: boolean, reason?: string}>} */
+  async requestDesktopPermission() {
     if (!('Notification' in window)) {
-      return { success: false, reason: 'Notifications API not supported in this browser' };
+      return { granted: false, reason: 'this browser has no Notification API' };
     }
 
-    try {
-      const permission = await Notification.requestPermission();
-      if (permission === 'granted') {
-        this.showToast('Browser Push Notifications Enabled', 'You will receive desktop alerts for critical brand mentions.', 'info');
-        return { success: true, permission };
-      } else {
-        this.showToast('Push Notifications Denied', 'Browser push permissions were denied or dismissed.', 'warning');
-        return { success: false, permission };
-      }
-    } catch (e) {
-      console.error('Error requesting push permission:', e);
-      return { success: false, reason: e.message };
+    if (Notification.permission === 'denied') {
+      return {
+        granted: false,
+        reason: 'notifications are blocked for this site - re-enable them in the browser site settings'
+      };
     }
+
+    const result = Notification.permission === 'granted'
+      ? 'granted'
+      : await Notification.requestPermission();
+
+    this.desktopEnabled = result === 'granted';
+    return this.desktopEnabled
+      ? { granted: true }
+      : { granted: false, reason: `permission ${result}` };
   }
 
   /**
-   * Send a Desktop Push Notification if enabled
+   * Raises a system notification from a server-pushed payload.
+   * @param {{title: string, body: string, tag: string, requireInteraction: boolean, url: string}} payload
    */
-  sendDesktopPush(title, options = {}) {
-    const config = StorageManager.getNotificationConfig();
-    if (!config.enableBrowserPush) return;
+  async showDesktop(payload) {
+    if (!this.desktopEnabled || this.permission !== 'granted') return false;
 
-    if ('Notification' in window && Notification.permission === 'granted') {
-      try {
-        const notification = new Notification(title, {
-          icon: options.icon || 'https://cdn-icons-png.flaticon.com/512/3602/3602145.png',
-          body: options.body || '',
-          tag: options.tag || 'social-mention',
-          requireInteraction: options.requireInteraction || false
+    const options = {
+      body: payload.body,
+      tag: payload.tag,
+      // Re-showing a tag silently would hide an escalating crisis.
+      renotify: payload.kind === 'crisis',
+      requireInteraction: Boolean(payload.requireInteraction),
+      data: { url: payload.url || '/' },
+      icon: BELL_ICON_DATA_URI,
+      badge: BELL_ICON_DATA_URI
+    };
+
+    try {
+      // The service worker path supports actions and outlives the page.
+      if (this.serviceWorker?.showNotification) {
+        await this.serviceWorker.showNotification(payload.title, {
+          ...options,
+          actions: payload.url && payload.url !== '/'
+            ? [{ action: 'open', title: 'Open post' }]
+            : []
         });
-
-        notification.onclick = function () {
-          window.focus();
-          if (options.url) {
-            window.open(options.url, '_blank');
-          }
-        };
-      } catch (e) {
-        console.warn('Could not dispatch desktop notification:', e);
+        return true;
       }
+
+      const notification = new Notification(payload.title, options);
+      notification.onclick = () => {
+        window.focus();
+        if (payload.url && payload.url !== '/') window.open(payload.url, '_blank', 'noopener');
+        notification.close();
+      };
+      return true;
+    } catch (error) {
+      console.warn('desktop notification failed', error.message);
+      return false;
     }
   }
 
-  /**
-   * Dispatch a Webhook notification payload to Slack / Discord / Custom endpoint
-   */
-  async dispatchWebhook(mention, configOverride = null) {
-    const config = configOverride || StorageManager.getNotificationConfig();
-    if (!config.enableWebhooks || !config.webhookUrl) return { sent: false };
+  /* ------------------------------------------------------------------- audio */
 
-    // Format rich payload tailored for Slack/Discord or standard webhooks
-    const isSlack = config.webhookUrl.includes('slack.com');
-    const isDiscord = config.webhookUrl.includes('discord.com');
+  #context() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return null;
 
-    let payload = {};
+    if (!this.audioContext) this.audioContext = new AudioContextClass();
+    // Browsers suspend audio until a user gesture has occurred.
+    if (this.audioContext.state === 'suspended') this.audioContext.resume();
 
-    if (isSlack) {
-      payload = {
-        text: `🚨 *[${mention.platform.toUpperCase()}] New Mention Alert*: "${mention.matchedKeyword}"`,
-        attachments: [
-          {
-            color: mention.sentiment === 'negative' ? '#f43f5e' : (mention.sentiment === 'positive' ? '#10b981' : '#94a3b8'),
-            author_name: `${mention.authorName} (${mention.authorHandle})`,
-            text: mention.text,
-            fields: [
-              { title: 'Sentiment', value: mention.sentiment.toUpperCase(), short: true },
-              { title: 'Platform', value: mention.platform, short: true }
-            ],
-            ts: Math.floor(new Date(mention.timestamp).getTime() / 1000)
-          }
-        ]
-      };
-    } else if (isDiscord) {
-      payload = {
-        username: 'Social Mention Monitor',
-        content: `🚨 **New Brand Mention Detected!**`,
-        embeds: [
-          {
-            title: `Mention on ${mention.platform}`,
-            description: mention.text,
-            color: mention.sentiment === 'negative' ? 16007006 : (mention.sentiment === 'positive' ? 1095937 : 9741240),
-            fields: [
-              { name: 'Keyword', value: mention.matchedKeyword, inline: true },
-              { name: 'Sentiment', value: mention.sentiment.toUpperCase(), inline: true },
-              { name: 'Author', value: `${mention.authorName} (${mention.authorHandle})`, inline: true }
-            ],
-            timestamp: new Date(mention.timestamp).toISOString()
-          }
-        ]
-      };
-    } else {
-      // Standard Generic Webhook JSON
-      payload = {
-        event: 'brand_mention',
-        timestamp: mention.timestamp,
-        matchedKeyword: mention.matchedKeyword,
-        sentiment: mention.sentiment,
-        platform: mention.platform,
-        author: {
-          name: mention.authorName,
-          handle: mention.authorHandle
-        },
-        content: mention.text,
-        url: mention.url
-      };
-    }
+    return this.audioContext;
+  }
 
-    try {
-      const response = await fetch(config.webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+  /** One tone. Kept private so the public methods read as intent, not synthesis. */
+  #tone({ frequency, startAt, duration, gain, type = 'sine' }) {
+    const context = this.#context();
+    if (!context) return;
 
-      StorageManager.addAlertLog({
-        type: 'WEBHOOK_SENT',
-        destination: config.webhookUrl,
-        mentionId: mention.id,
-        status: response.ok ? 'SUCCESS' : `HTTP ${response.status}`
-      });
+    const oscillator = context.createOscillator();
+    const amplifier = context.createGain();
 
-      return { sent: true, ok: response.ok, status: response.status };
-    } catch (e) {
-      console.error('Webhook dispatch failed:', e);
-      StorageManager.addAlertLog({
-        type: 'WEBHOOK_FAILED',
-        destination: config.webhookUrl,
-        mentionId: mention.id,
-        error: e.message
-      });
-      return { sent: false, error: e.message };
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, startAt);
+
+    amplifier.gain.setValueAtTime(0.0001, startAt);
+    amplifier.gain.exponentialRampToValueAtTime(gain, startAt + 0.015);
+    amplifier.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+
+    oscillator.connect(amplifier);
+    amplifier.connect(context.destination);
+    oscillator.start(startAt);
+    oscillator.stop(startAt + duration + 0.02);
+  }
+
+  /** Soft two-note chime for an ordinary mention. */
+  playChime(sentiment = 'neutral') {
+    if (!this.soundEnabled) return;
+    const context = this.#context();
+    if (!context) return;
+
+    const now = context.currentTime;
+    // Rising for good news, falling for bad - distinguishable without looking.
+    const notes = sentiment === 'negative' ? [659.25, 523.25] : [523.25, 659.25];
+
+    this.#tone({ frequency: notes[0], startAt: now, duration: 0.16, gain: CHIME_GAIN });
+    this.#tone({ frequency: notes[1], startAt: now + 0.12, duration: 0.2, gain: CHIME_GAIN });
+  }
+
+  /** Three urgent pulses for a crisis - deliberately unlike the chime. */
+  playAlarm() {
+    if (!this.soundEnabled) return;
+    const context = this.#context();
+    if (!context) return;
+
+    const now = context.currentTime;
+    for (let pulse = 0; pulse < 3; pulse += 1) {
+      const startAt = now + pulse * 0.26;
+      this.#tone({ frequency: 880, startAt, duration: 0.1, gain: ALARM_GAIN, type: 'square' });
+      this.#tone({ frequency: 1174.66, startAt: startAt + 0.1, duration: 0.12, gain: ALARM_GAIN, type: 'square' });
     }
   }
 
-  /**
-   * Synthesize audio chime alert using Web Audio API (Zero external assets required!)
-   */
-  playAudioAlert(isUrgent = false) {
-    const config = StorageManager.getNotificationConfig();
-    if (!config.enableSound) return;
-
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
-      if (!this.audioContext) {
-        this.audioContext = new AudioCtx();
-      }
-
-      if (this.audioContext.state === 'suspended') {
-        this.audioContext.resume();
-      }
-
-      const now = this.audioContext.currentTime;
-      const osc = this.audioContext.createOscillator();
-      const gain = this.audioContext.createGain();
-
-      osc.type = isUrgent ? 'sawtooth' : 'sine';
-      
-      if (isUrgent) {
-        // High alert two-tone alarm chime
-        osc.frequency.setValueAtTime(880, now); // A5
-        osc.frequency.setValueAtTime(1174.66, now + 0.12); // D6
-        gain.gain.setValueAtTime(0.3, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-      } else {
-        // Soft positive chime
-        osc.frequency.setValueAtTime(523.25, now); // C5
-        osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
-        gain.gain.setValueAtTime(0.15, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-      }
-
-      osc.connect(gain);
-      gain.connect(this.audioContext.destination);
-
-      osc.start(now);
-      osc.stop(now + (isUrgent ? 0.35 : 0.25));
-    } catch (e) {
-      console.warn('Audio alert error:', e);
-    }
-  }
+  /* ------------------------------------------------------------------ toasts */
 
   /**
-   * Display floating UI Toast Notification
+   * @param {{title: string, message?: string, type?: 'info'|'positive'|'negative'|'warning'|'crisis', durationMs?: number}} options
    */
-  showToast(title, message, type = 'info', durationMs = 4500) {
+  toast({ title, message = '', type = 'info', durationMs }) {
     const container = document.getElementById('toast-container');
     if (!container) return;
 
+    const icons = {
+      info: '🔔',
+      positive: '✨',
+      negative: '⚠️',
+      warning: '⚠️',
+      crisis: '🔥'
+    };
+
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
+    toast.setAttribute('role', type === 'crisis' || type === 'negative' ? 'alert' : 'status');
 
-    let icon = '🔔';
-    if (type === 'negative') icon = '⚠️';
-    if (type === 'positive') icon = '✨';
+    const icon = document.createElement('div');
+    icon.className = 'toast-icon';
+    icon.textContent = icons[type] || icons.info;
 
-    toast.innerHTML = `
-      <div class="toast-icon">${icon}</div>
-      <div class="toast-content">
-        <div class="toast-title">${this.escapeHtml(title)}</div>
-        <div class="toast-message">${this.escapeHtml(message)}</div>
-      </div>
-    `;
+    const content = document.createElement('div');
+    content.className = 'toast-content';
 
+    const titleNode = document.createElement('div');
+    titleNode.className = 'toast-title';
+    titleNode.textContent = title;
+    content.appendChild(titleNode);
+
+    if (message) {
+      const messageNode = document.createElement('div');
+      messageNode.className = 'toast-message';
+      messageNode.textContent = message;
+      content.appendChild(messageNode);
+    }
+
+    const close = document.createElement('button');
+    close.className = 'toast-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.textContent = '✕';
+    close.addEventListener('click', () => dismiss());
+
+    toast.append(icon, content, close);
     container.appendChild(toast);
 
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateX(20px)';
-      toast.style.transition = 'all 0.3s ease';
-      setTimeout(() => toast.remove(), 300);
-    }, durationMs);
-  }
+    let dismissed = false;
+    const dismiss = () => {
+      if (dismissed) return;
+      dismissed = true;
+      toast.classList.add('toast-leaving');
+      setTimeout(() => toast.remove(), 260);
+    };
 
-  escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+    const timeout = durationMs ??
+      (type === 'crisis' ? CRISIS_TOAST_DURATION_MS : TOAST_DURATION_MS);
+    setTimeout(dismiss, timeout);
+
+    return dismiss;
   }
+}
+
+/** Small inline bell, so notifications carry an icon with no network request. */
+const BELL_ICON_DATA_URI =
+  'data:image/svg+xml;base64,' + btoa(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
+    '<rect width="64" height="64" rx="14" fill="#6366f1"/>' +
+    '<path d="M32 14a9 9 0 0 0-9 9v7l-4 7h26l-4-7v-7a9 9 0 0 0-9-9zm0 32a5 5 0 0 0 5-5H27a5 5 0 0 0 5 5z" fill="#fff"/>' +
+    '</svg>'
+  );
+
+export function createNotificationCenter() {
+  return new NotificationCenter();
 }

@@ -1,0 +1,65 @@
+[Unit]
+Description=Social Media Monitor - brand mention monitoring and alerting
+Documentation=https://github.com/josaphatrabago-prog/social-media-monitor
+# network-online, not just network: the poller reaches out to the Meta and
+# YouTube APIs the moment it starts, and "network" is satisfied before there is
+# a usable route.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smmonitor
+Group=smmonitor
+WorkingDirectory=/opt/social-media-monitor
+
+# Written fresh from GitHub secrets on every deploy, so the copy on the droplet
+# is never the source of truth and a rotated API key takes effect on the next
+# push. Absent on a first deploy, hence the dash - the unit must still start so
+# the mock/demo mode is reachable.
+EnvironmentFile=-/opt/social-media-monitor/.env
+
+ExecStart=/usr/bin/node server.js
+
+Restart=on-failure
+RestartSec=5
+# A crash loop against a rate-limited social API should back off rather than
+# hammer it. Five failures inside a minute stops the unit for manual attention.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=social-media-monitor
+
+# --- Resource limits --------------------------------------------------------
+# This is a 1 GB droplet already running matchpoint. Without a cap, a runaway
+# mention backlog here would push the other app's node process into the OOM
+# killer - the failure would land on the wrong service entirely.
+MemoryMax=250M
+MemoryHigh=200M
+TasksMax=64
+
+# --- Hardening --------------------------------------------------------------
+# The process parses untrusted text from four public APIs, so it gets the
+# narrowest surface that still lets it run.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# ProtectSystem=strict mounts the whole filesystem read-only, so the one
+# directory the app legitimately writes - the mention store and its CSV exports
+# - has to be granted back explicitly.
+ReadWritePaths=/opt/social-media-monitor/data
+# Outbound HTTPS to the platform APIs and webhooks, plus SMTP for email alerts.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

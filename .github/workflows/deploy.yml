@@ -1,0 +1,363 @@
+name: Test and deploy
+
+# CI on every push and pull request; deploy only from main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  # This droplet is shared with matchpoint-academy, but the two apps touch
+  # entirely separate files, users and ports - so this group only needs to
+  # serialise THIS app's deploys against each other. Two rsyncs racing over the
+  # same directory while systemd restarts underneath is the failure to prevent.
+  group: deploy-social-media-monitor
+  cancel-in-progress: false
+
+env:
+  DROPLET_IP: 188.166.220.167
+  APP_ROOT: /opt/social-media-monitor
+  SERVICE_USER: smmonitor
+  SERVICE_NAME: social-media-monitor
+  # The dashboard's public port. matchpoint owns 80/443 as nginx's
+  # default_server and its node process owns 3000, so this app takes neither.
+  PUBLIC_PORT: 8080
+  # Node listens here on loopback only; nginx is the sole way in.
+  APP_PORT: 3100
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      # The app has no runtime dependencies today (package.json declares an
+      # empty dependencies object), so there is no lockfile to install from.
+      # `npm ci` hard-fails without one, hence the check rather than an
+      # unconditional install - this starts working on its own the day a real
+      # dependency and its lockfile are committed.
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "No package-lock.json and no declared dependencies - nothing to install."
+          fi
+
+      # The test script is wired up in package.json but tests/run.js has not
+      # been written yet. Skipping loudly beats a green tick that silently means
+      # "no tests ran"; this becomes a real gate the moment the file lands.
+      - name: Run tests
+        run: |
+          if [ -f tests/run.js ]; then
+            npm test
+          else
+            echo "::warning title=No tests::tests/run.js does not exist yet - no tests were run."
+          fi
+
+      # Nothing is bundled or transpiled, so the cheapest real signal available
+      # is that every module actually parses. This catches a broken import or a
+      # stray syntax error before it reaches the droplet.
+      - name: Syntax-check every module
+        run: |
+          set -e
+          found=0
+          for file in $(find src js -name '*.js' -type f 2>/dev/null) server.js; do
+            [ -f "$file" ] || continue
+            node --check "$file"
+            found=$((found + 1))
+          done
+          echo "Parsed $found module(s) cleanly."
+
+  deploy:
+    name: Deploy to droplet
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up deploy key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Host key pinned from the droplet itself rather than discovered with
+          # ssh-keyscan at run time. A key fetched at run time is whatever
+          # answers on the day, which is no verification at all.
+          echo "188.166.220.167 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINYrfEGVp1R1b7NSvWI0Y752iEXdZE6U/8TL/4nRWoJm" > ~/.ssh/known_hosts
+
+      # Fails with an explanation rather than letting rsync emit a bare exit 255
+      # a dozen lines into the next step.
+      - name: Preflight - can we reach the droplet?
+        run: |
+          if ! ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o BatchMode=yes \
+                   -o ConnectTimeout=10 root@$DROPLET_IP 'true'; then
+            echo "::error::Cannot SSH to $DROPLET_IP as root with the DEPLOY_SSH_KEY secret."
+            echo "Check, in order:" >&2
+            echo "  1. The public half of that key is in /root/.ssh/authorized_keys on the droplet." >&2
+            echo "  2. DEPLOY_SSH_KEY holds the PRIVATE key, whole, including both BEGIN/END lines." >&2
+            echo "  3. The host key still matches the pin above (it changes if the droplet is rebuilt)." >&2
+            exit 1
+          fi
+          echo "SSH ok."
+
+      # Without this the nginx config would install with the literal placeholder
+      # still in it, and the gate would accept the string "__MONITOR_TOKEN__" as
+      # a valid password. Fail closed instead.
+      - name: Guard - MONITOR_TOKEN must be set
+        env:
+          MONITOR_TOKEN: ${{ secrets.MONITOR_TOKEN }}
+        run: |
+          if [ -z "$MONITOR_TOKEN" ]; then
+            echo "::error::The MONITOR_TOKEN secret is empty. The dashboard's access gate cannot be installed without it."
+            exit 1
+          fi
+          echo "MONITOR_TOKEN is set."
+
+      # Idempotent and version-controlled, so a rebuilt droplet needs no
+      # remembered steps: service user, directories, firewall rule. Does nothing
+      # on a droplet already provisioned.
+      - name: Bootstrap the droplet (idempotent)
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            infra/bootstrap.sh root@$DROPLET_IP:/tmp/smm-bootstrap.sh
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@$DROPLET_IP \
+            "chmod +x /tmp/smm-bootstrap.sh && APP_ROOT=$APP_ROOT SERVICE_USER=$SERVICE_USER PUBLIC_PORT=$PUBLIC_PORT /tmp/smm-bootstrap.sh"
+
+      # Plain --delete, not --delete-excluded: excluded paths are left alone on
+      # the server, which is exactly what data/ (the mention store) and .env
+      # (the API keys) need. --delete-excluded would wipe both.
+      #
+      # CLAUDE_PROMPT.md goes out with the other markdown - it is the brief this
+      # project was built from, not something to publish under a web root.
+      - name: Deploy code via rsync
+        run: |
+          rsync -az --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.claude' \
+            --exclude='infra' \
+            --exclude='tests' \
+            --exclude='*.md' \
+            --exclude='node_modules' \
+            --exclude='data' \
+            --exclude='.env' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            ./ root@$DROPLET_IP:$APP_ROOT/
+
+      # Written from secrets on every deploy, so the droplet's copy is never the
+      # source of truth and a rotated key takes effect on the next push.
+      #
+      # Secrets arrive through this step's `env:` and are written with `echo`,
+      # NOT interpolated into a heredoc. An unquoted heredoc is expanded by bash,
+      # so a webhook URL or SMTP password containing a `$` would be silently
+      # mangled - and those are exactly the values that have punctuation in them.
+      #
+      # Every platform key is optional by design: the app skips any platform it
+      # has no credentials for, so an empty secret here degrades to "that network
+      # is not monitored" rather than a startup failure.
+      - name: Write the environment file
+        env:
+          MONITOR_TOKEN: ${{ secrets.MONITOR_TOKEN }}
+          FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          TIKTOK_RESEARCH_TOKEN: ${{ secrets.TIKTOK_RESEARCH_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+        run: |
+          umask 077
+          {
+            echo "NODE_ENV=production"
+            echo "TZ=Asia/Manila"
+            # Loopback only. nginx on :8080 is the single way in, so the app
+            # itself is never directly reachable from the internet.
+            echo "HOST=127.0.0.1"
+            echo "PORT=$APP_PORT"
+            echo "MONITOR_TOKEN=$MONITOR_TOKEN"
+            echo "FB_ACCESS_TOKEN=$FB_ACCESS_TOKEN"
+            echo "IG_ACCESS_TOKEN=$IG_ACCESS_TOKEN"
+            echo "IG_BUSINESS_ACCOUNT_ID=$IG_BUSINESS_ACCOUNT_ID"
+            echo "YOUTUBE_API_KEY=$YOUTUBE_API_KEY"
+            echo "APIFY_TOKEN=$APIFY_TOKEN"
+            echo "RAPIDAPI_KEY=$RAPIDAPI_KEY"
+            echo "TIKTOK_RESEARCH_TOKEN=$TIKTOK_RESEARCH_TOKEN"
+            echo "SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL"
+            echo "DISCORD_WEBHOOK_URL=$DISCORD_WEBHOOK_URL"
+            echo "TEAMS_WEBHOOK_URL=$TEAMS_WEBHOOK_URL"
+            echo "SMTP_HOST=$SMTP_HOST"
+            echo "SMTP_PORT=${SMTP_PORT:-465}"
+            echo "SMTP_USER=$SMTP_USER"
+            echo "SMTP_PASS=$SMTP_PASS"
+            echo "SMTP_FROM=$SMTP_FROM"
+            echo "ALERT_EMAIL_TO=$ALERT_EMAIL_TO"
+          } > /tmp/smm.env
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            /tmp/smm.env root@$DROPLET_IP:$APP_ROOT/.env
+          rm -f /tmp/smm.env
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@$DROPLET_IP \
+            "chmod 600 $APP_ROOT/.env && chown $SERVICE_USER:$SERVICE_USER $APP_ROOT/.env"
+
+      - name: Install production dependencies
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@$DROPLET_IP "set -e
+            cd $APP_ROOT
+            if [ -f package-lock.json ]; then
+              npm ci --omit=dev
+            else
+              echo 'No lockfile and no declared dependencies - skipping npm install.'
+            fi
+            mkdir -p $APP_ROOT/data
+            chown -R $SERVICE_USER:$SERVICE_USER $APP_ROOT
+            # nginx (www-data) serves index.html, css/ and js/ straight off
+            # disk, so it must be able to traverse the app root. .env is put
+            # back to 600 right after, since the chown above widened nothing but
+            # the ownership and the mode still needs asserting.
+            chmod 755 $APP_ROOT
+            chmod 600 $APP_ROOT/.env
+            node --version"
+
+      # The backend entry point is still being written. Installing and starting
+      # a unit whose ExecStart does not exist would leave a permanently failing
+      # service and a red deploy, so the service is managed only once the file
+      # it runs actually exists. Until then the dashboard is served statically by
+      # nginx, which is all it needs - the front-end is self-contained and calls
+      # no API of its own.
+      - name: Install the systemd unit and restart
+        run: |
+          HAS_SERVER=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@$DROPLET_IP \
+            "[ -f $APP_ROOT/server.js ] && echo yes || echo no")
+
+          if [ "$HAS_SERVER" != "yes" ]; then
+            echo "::warning title=Backend not deployed::server.js does not exist yet - the dashboard is served as static files and the $SERVICE_NAME service was not started."
+            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@$DROPLET_IP \
+              "systemctl stop $SERVICE_NAME 2>/dev/null || true"
+            exit 0
+          fi
+
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            infra/$SERVICE_NAME.service root@$DROPLET_IP:/etc/systemd/system/$SERVICE_NAME.service
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@$DROPLET_IP "set -e
+            systemctl daemon-reload
+            systemctl enable $SERVICE_NAME >/dev/null
+            systemctl restart $SERVICE_NAME
+            sleep 3
+            if ! systemctl is-active --quiet $SERVICE_NAME; then
+              echo '::error::The $SERVICE_NAME service did not come up.'
+              systemctl status $SERVICE_NAME --no-pager -l | tail -30 >&2
+              journalctl -u $SERVICE_NAME --no-pager -n 40 >&2
+              exit 1
+            fi
+            echo '$SERVICE_NAME service is active'"
+
+      # Staged with a rollback rather than copied into place. `nginx -t` stops a
+      # bad config being loaded, but a broken file left on disk means nginx runs
+      # fine until its next restart and then refuses to start - a latent outage
+      # for BOTH apps on this box, triggered weeks later by something unrelated.
+      - name: Install the nginx config and reload
+        env:
+          MONITOR_TOKEN: ${{ secrets.MONITOR_TOKEN }}
+        run: |
+          # The token is substituted here, on the runner, so the committed config
+          # only ever contains the placeholder. `|` as the sed delimiter because
+          # the token could contain a slash.
+          sed "s|__MONITOR_TOKEN__|$MONITOR_TOKEN|g" infra/nginx.conf > /tmp/smm-nginx.conf
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            /tmp/smm-nginx.conf root@$DROPLET_IP:/etc/nginx/sites-available/$SERVICE_NAME.new
+          rm -f /tmp/smm-nginx.conf
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes root@$DROPLET_IP 'set -u
+            CONF=/etc/nginx/sites-available/social-media-monitor
+            [ -f "$CONF" ] && cp -f "$CONF" "$CONF.bak"
+            mv -f "$CONF.new" "$CONF"
+            # Contains the access token, so it is not left world-readable.
+            chmod 640 "$CONF"
+            chown root:www-data "$CONF"
+            ln -sf "$CONF" /etc/nginx/sites-enabled/social-media-monitor
+            if nginx -t; then
+              if systemctl reload nginx; then
+                echo "nginx: validated and reloaded"
+              else
+                echo "::error::nginx config is valid but the reload FAILED - the running server is still on its previous config."
+                systemctl status nginx --no-pager -l 2>&1 | tail -20 >&2
+                exit 1
+              fi
+            else
+              echo "::error::nginx config failed validation - rolling back"
+              if [ -f "$CONF.bak" ]; then
+                mv -f "$CONF.bak" "$CONF"
+              else
+                rm -f /etc/nginx/sites-enabled/social-media-monitor
+              fi
+              nginx -t && systemctl reload nginx
+              echo "nginx: previous state restored" >&2
+              exit 1
+            fi'
+
+      # A green deploy that serves 401s to everyone, or 200s to everyone, are
+      # both worth catching. The run does not pass until the gate behaves.
+      - name: Smoke-test the deployment
+        env:
+          MONITOR_TOKEN: ${{ secrets.MONITOR_TOKEN }}
+        run: |
+          set -e
+          BASE="http://$DROPLET_IP:$PUBLIC_PORT"
+
+          for attempt in 1 2 3 4 5; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE/healthz" || echo 000)
+            [ "$CODE" = "200" ] && break
+            echo "attempt $attempt: /healthz returned $CODE, retrying..."
+            sleep 4
+          done
+          if [ "$CODE" != "200" ]; then
+            echo "::error::/healthz returned $CODE, not 200. nginx is not serving on port $PUBLIC_PORT."
+            exit 1
+          fi
+          echo "healthz: 200"
+
+          # The gate must actually refuse an anonymous request. If this returns
+          # 200, the token substitution failed and the client mention feed is
+          # public.
+          ANON=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE/" || echo 000)
+          if [ "$ANON" != "401" ]; then
+            echo "::error::The dashboard returned $ANON to a request with no token, expected 401. The access gate is NOT protecting it."
+            exit 1
+          fi
+          echo "gate: anonymous request correctly refused (401)"
+
+          # And it must let a correct token through, or the gate is just a wall.
+          AUTHED=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+            -H "X-Monitor-Token: $MONITOR_TOKEN" "$BASE/" || echo 000)
+          if [ "$AUTHED" != "200" ]; then
+            echo "::error::The dashboard returned $AUTHED to a correctly-tokened request, expected 200."
+            exit 1
+          fi
+          echo "gate: valid token accepted (200)"
+
+          # Confirm what is served is the dashboard and not an nginx default page.
+          BODY=$(curl -s --max-time 15 -H "X-Monitor-Token: $MONITOR_TOKEN" "$BASE/")
+          if ! echo "$BODY" | grep -q 'js/app.js'; then
+            echo "::error::The page served does not reference js/app.js - wrong document root?"
+            echo "$BODY" | head -c 400
+            exit 1
+          fi
+          echo "dashboard: served correctly"
+
+          echo "Deployed: $BASE/?token=<MONITOR_TOKEN>"
