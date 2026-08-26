@@ -170,15 +170,33 @@ try {
   process.stdout.write('\n[3] next\n');
 
   if (args['set-secrets']) {
+    // --repo explicitly, so the secrets cannot land in a different repository
+    // just because the script was run from the wrong directory.
+    const repo = args.repo || 'josaphatrabago-prog/social-media-monitor';
+
     for (const [name, value] of [
       ['FB_ACCESS_TOKEN', bestToken],
       ['FB_PAGE_IDS', pageIds.join(',')]
     ]) {
-      execFileSync('gh', ['secret', 'set', name, '--body', value], { stdio: 'inherit' });
-      process.stdout.write(`    set ${name}\n`);
+      try {
+        execFileSync('gh', ['secret', 'set', name, '--repo', repo, '--body', value], {
+          stdio: ['ignore', 'inherit', 'inherit']
+        });
+        process.stdout.write(`    set ${name}\n`);
+      } catch (ghError) {
+        process.stdout.write(
+          `\n    COULD NOT SET ${name}: ${ghError.message.split('\n')[0]}\n` +
+          '    Is the GitHub CLI installed and logged in? Check with `gh auth status`.\n' +
+          '    You can set it by hand instead:\n\n' +
+          `      gh secret set ${name} --repo ${repo}\n\n`
+        );
+        process.exitCode = 1;
+      }
     }
 
-    process.stdout.write('\n    Secrets written. Tell Claude to redeploy.\n\n');
+    if (process.exitCode !== 1) {
+      process.stdout.write(`\n    SUCCESS - both secrets written to ${repo}.\n    Tell Claude to redeploy.\n\n`);
+    }
   } else {
     process.stdout.write(
       '    Run these (or re-run this script with --set-secrets):\n\n' +
