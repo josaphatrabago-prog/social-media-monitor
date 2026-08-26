@@ -213,8 +213,14 @@ export function createServer(context) {
         server.once('error', reject);
         server.listen(port, host, () => {
           server.removeListener('error', reject);
-          const suffix = authToken ? `?token=${authToken}` : '';
-          log.info(`dashboard on http://${host}:${port}/${suffix}`);
+          // The token is deliberately not logged. MONITOR_TOKEN is a bearer
+          // credential and this line lands in journald, where log readers and
+          // any shipper would pick it up. It is only ever set in production,
+          // which is exactly where writing it to disk is wrong.
+          log.info(
+            `dashboard on http://${host}:${port}/` +
+            (authToken ? ' (access token required - see MONITOR_TOKEN)' : '')
+          );
           resolve({ host, port });
         });
       });
