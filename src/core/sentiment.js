@@ -54,16 +54,16 @@ const WORD_SCORES = {
   // --- Tagalog / Filipino
   maganda: 2, ganda: 2, magaling: 2, galing: 2, husay: 2, mahusay: 2,
   matibay: 2, tibay: 2, sulit: 2, salamat: 2, maayos: 2, mabilis: 1,
-  astig: 2, aprubado: 1, malinis: 1, presyo: 0,
+  astig: 2, aprubado: 1, malinis: 1,
   pangit: -2, palpak: -2, sablay: -2, budol: -3, niloko: -3, nagloko: -3,
   manloloko: -3, kalokohan: -2, reklamo: -2, sumbong: -2, lugi: -2,
   basura: -2, walanghiya: -3, gago: -3, bulok: -2, tagas: -2, tulo: -1,
 
   // --- Cebuano / Bisaya
-  maayo: 2, nindot: 2, kanindot: 2, salamat_kaayo: 3, hayahay: 1,
-  paspas: 1, barato: 1, tinuod: 1,
-  ngil: 0, bati: -2, hugaw: -2, guba: -2, buak: -2, kawatan: -3,
-  limbongan: -3, sayang: -2, hinay: -1, mahal_kaayo: -1
+  maayo: 2, nindot: 2, kanindot: 2, hayahay: 1, paspas: 1, barato: 1,
+  tinuod: 1,
+  bati: -2, hugaw: -2, guba: -2, buak: -2, kawatan: -3, limbongan: -3,
+  sayang: -2, hinay: -1
 };
 
 /**
@@ -169,7 +169,7 @@ const POSTFIX_INTENSIFIERS = new Set(['kaayo', 'talaga', 'gyud', 'jud', 'sobra',
 
 /** Soften the adjacent scored term. */
 const DIMINISHERS = new Set([
-  'slightly', 'somewhat', 'kinda', 'kind', 'sorta', 'a', 'bit', 'little',
+  'slightly', 'somewhat', 'kinda', 'sorta', 'bit', 'little',
   'medyo', 'konti', 'gamay', 'parang'
 ]);
 

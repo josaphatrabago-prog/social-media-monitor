@@ -152,6 +152,18 @@ function dropShadowedMatches(matches) {
 export class Matcher {
   /** @param {Array<Object>} companies from config.companies */
   constructor(companies) {
+    this.rebuild(companies);
+  }
+
+  /**
+   * Recompiles every pattern in place.
+   *
+   * Done in place rather than by constructing a new Matcher because connectors,
+   * the pipeline and the scheduler all hold a reference to this instance -
+   * swapping the object would leave them pointing at stale terms after a live
+   * config change.
+   */
+  rebuild(companies) {
     this.companies = companies || [];
     this.terms = this.companies.flatMap(compileCompany);
     this.excludes = new Map(
@@ -163,6 +175,8 @@ export class Matcher {
           .map((term) => ({ term, pattern: compileTerm(term) }))
       ])
     );
+
+    return this;
   }
 
   /**

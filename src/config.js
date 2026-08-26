@@ -325,8 +325,13 @@ export class ConfigStore {
       throw new Error(`Invalid configuration:\n  - ${errors.join('\n  - ')}`);
     }
 
+    // Only log warnings that are new. refresh() runs on every update, and
+    // re-printing the same six lines after each config change buries the ones
+    // that actually just appeared.
+    const alreadySeen = new Set(this.warnings);
+    warnings.filter((warning) => !alreadySeen.has(warning)).forEach((warning) => log.warn(warning));
+
     this.warnings = warnings;
-    warnings.forEach((warning) => log.warn(warning));
     this.resolved = resolved;
   }
 
