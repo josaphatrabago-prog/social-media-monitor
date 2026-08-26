@@ -153,6 +153,29 @@ function applyEnvOverrides(config) {
   if (process.env.MONITOR_FREQUENCY) result.monitoring.frequency = process.env.MONITOR_FREQUENCY;
   if (process.env.SMTP_PORT) result.notifications.email.smtp.port = Number(process.env.SMTP_PORT);
 
+  /**
+   * Comma-separated id lists that would otherwise need a config.json edit.
+   *
+   * Facebook Page and group ids are not secret, but they arrive at the same
+   * moment as the token they belong to, so accepting them as env vars means
+   * connecting a new Page is a `gh secret set` rather than a code change and
+   * a deploy.
+   */
+  const idLists = [
+    ['FB_PAGE_IDS', ['facebook', 'pageIds']],
+    ['FB_GROUP_IDS', ['facebook', 'searchGroups']]
+  ];
+
+  for (const [variable, [platform, field]] of idLists) {
+    const raw = process.env[variable];
+    if (!raw) continue;
+
+    const ids = raw.split(',').map((id) => id.trim()).filter(Boolean);
+    if (!ids.length) continue;
+
+    result.platforms[platform] = { ...(result.platforms[platform] || {}), [field]: ids };
+  }
+
   if (process.env.ALERT_EMAIL_TO) {
     const recipients = process.env.ALERT_EMAIL_TO
       .split(',')
