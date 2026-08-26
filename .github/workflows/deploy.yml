@@ -170,6 +170,8 @@ jobs:
           FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
+          FB_PAGE_IDS: ${{ secrets.FB_PAGE_IDS }}
+          FB_GROUP_IDS: ${{ secrets.FB_GROUP_IDS }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
@@ -196,6 +198,11 @@ jobs:
             echo "FB_ACCESS_TOKEN=$FB_ACCESS_TOKEN"
             echo "IG_ACCESS_TOKEN=$IG_ACCESS_TOKEN"
             echo "IG_BUSINESS_ACCOUNT_ID=$IG_BUSINESS_ACCOUNT_ID"
+            # Page/group ids are not secrets, but they arrive with the
+            # token they belong to, so carrying them the same way means
+            # adding a Page needs no code change.
+            echo "FB_PAGE_IDS=$FB_PAGE_IDS"
+            echo "FB_GROUP_IDS=$FB_GROUP_IDS"
             echo "YOUTUBE_API_KEY=$YOUTUBE_API_KEY"
             echo "APIFY_TOKEN=$APIFY_TOKEN"
             echo "RAPIDAPI_KEY=$RAPIDAPI_KEY"
