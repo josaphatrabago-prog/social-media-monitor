@@ -273,6 +273,20 @@ export function validateConfig(config) {
 
 /* ------------------------------------------------------------------- loader */
 
+/** Removes from `overrides` every key that `patch` sets explicitly. */
+function dropOverriddenKeys(overrides, patch) {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!(key in overrides)) continue;
+
+    if (isPlainObject(value) && isPlainObject(overrides[key])) {
+      dropOverriddenKeys(overrides[key], value);
+      if (Object.keys(overrides[key]).length === 0) delete overrides[key];
+    } else {
+      delete overrides[key];
+    }
+  }
+}
+
 function redact(node, keyName = '') {
   if (typeof node === 'string') {
     if (!node) return '';
@@ -294,6 +308,15 @@ export class ConfigStore {
     this.raw = clone(DEFAULTS);
     this.resolved = clone(DEFAULTS);
     this.warnings = [];
+
+    /**
+     * Session-only values from CLI flags such as --mock or --frequency.
+     *
+     * Held apart from `raw` because save() writes `raw` to disk: if a flag were
+     * merged into it, the first persisted change from anywhere in the app would
+     * silently make that flag permanent.
+     */
+    this.overrides = {};
   }
 
   /** Reads .env and config.json from disk. Throws on validation errors. */
@@ -318,7 +341,8 @@ export class ConfigStore {
 
   /** Re-resolves placeholders and re-validates. Throws if invalid. */
   refresh() {
-    const resolved = applyEnvOverrides(resolvePlaceholders(this.raw));
+    const merged = deepMerge(this.raw, this.overrides);
+    const resolved = applyEnvOverrides(resolvePlaceholders(merged));
     const { errors, warnings } = validateConfig(resolved);
 
     if (errors.length) {
@@ -345,12 +369,37 @@ export class ConfigStore {
    */
   update(patch) {
     const previousRaw = clone(this.raw);
+    const previousOverrides = clone(this.overrides);
+
+    // An explicit change wins over a CLI flag for the same key, otherwise the
+    // flag would keep shadowing it for the rest of the session.
+    dropOverriddenKeys(this.overrides, patch);
     this.raw = deepMerge(this.raw, patch);
 
     try {
       this.refresh();
     } catch (error) {
       this.raw = previousRaw;
+      this.overrides = previousOverrides;
+      this.refresh();
+      throw error;
+    }
+
+    return this.resolved;
+  }
+
+  /**
+   * Applies session-only CLI overrides. These affect the running process but
+   * are never written by save().
+   */
+  setOverrides(patch) {
+    const previousOverrides = clone(this.overrides);
+    this.overrides = deepMerge(this.overrides, patch);
+
+    try {
+      this.refresh();
+    } catch (error) {
+      this.overrides = previousOverrides;
       this.refresh();
       throw error;
     }

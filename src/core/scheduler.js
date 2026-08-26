@@ -168,10 +168,12 @@ export class Scheduler extends EventEmitter {
 
     const delay = delayOverride ?? slot.delayMs();
     slot.nextRunAt = Date.now() + delay;
-    slot.timer = setTimeout(() => this.#runSlot(slot), delay);
 
-    // Never let a pending poll keep the process alive on its own.
-    if (typeof slot.timer.unref === 'function') slot.timer.unref();
+    // Deliberately NOT unref'd. A pending poll is the thing that keeps a
+    // headless run (--no-server) alive; unref'ing here made the process exit
+    // before its first poll. stop() clears every timer, which is the correct
+    // way to let the process end.
+    slot.timer = setTimeout(() => this.#runSlot(slot), delay);
   }
 
   /** The window this poll should ask each connector for. */

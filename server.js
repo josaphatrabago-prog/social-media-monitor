@@ -17,6 +17,10 @@
  *   node server.js --port 4000     override the port
  *   node server.js --frequency 1m  override the polling frequency
  *   node server.js --no-server     poll without serving the dashboard
+ *
+ * In production HOST, PORT and MONITOR_TOKEN come from the environment, which
+ * is how infra/social-media-monitor.service and infra/nginx.conf reach it: the
+ * app listens on loopback and nginx injects the token header upstream.
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,16 +69,26 @@ function parseArgs(argv) {
   return args;
 }
 
-/** Applies CLI overrides on top of the loaded config. */
+/**
+ * Applies CLI flags as session-only overrides.
+ *
+ * Deliberately setOverrides() and not update(): a flag like --frequency must
+ * not end up in config.json the next time something persists a change.
+ */
 function applyCliOverrides(configStore, args) {
+  const monitoring = {};
+  if (args.mock) monitoring.mockMode = 'on';
+  if (args.frequency) monitoring.frequency = args.frequency;
+
+  const server = {};
+  if (args.port) server.port = Number(args.port);
+  if (args.host) server.host = args.host;
+
   const patch = {};
+  if (Object.keys(monitoring).length) patch.monitoring = monitoring;
+  if (Object.keys(server).length) patch.server = server;
 
-  if (args.mock) patch.monitoring = { ...patch.monitoring, mockMode: 'on' };
-  if (args.frequency) patch.monitoring = { ...patch.monitoring, frequency: args.frequency };
-  if (args.port) patch.server = { port: Number(args.port) };
-  if (args.host) patch.server = { ...patch.server, host: args.host };
-
-  if (Object.keys(patch).length > 0) configStore.update(patch);
+  if (Object.keys(patch).length > 0) configStore.setOverrides(patch);
 }
 
 async function main() {
