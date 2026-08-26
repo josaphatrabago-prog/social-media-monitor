@@ -134,7 +134,9 @@ function resolvePlaceholders(node) {
   if (isPlainObject(node)) {
     const result = {};
     for (const [key, value] of Object.entries(node)) {
-      if (key === '$comment') continue;
+      // Any "$..." key is documentation for whoever edits config.json and is
+      // dropped before the config reaches the app.
+      if (key.startsWith('$')) continue;
       result[key] = resolvePlaceholders(value);
     }
     return result;
@@ -193,7 +195,7 @@ export function validateConfig(config) {
         seenIds.add(company.id);
       }
 
-      for (const field of ['aliases', 'hashtags', 'handles', 'exclude']) {
+      for (const field of ['aliases', 'hashtags', 'handles', 'exclude', 'searchTerms']) {
         if (company[field] !== undefined && !Array.isArray(company[field])) {
           errors.push(`${where}.${field} must be an array`);
         }

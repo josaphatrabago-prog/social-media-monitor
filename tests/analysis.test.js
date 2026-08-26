@@ -229,3 +229,56 @@ describe('sentiment', () => {
     }
   });
 });
+
+describe('search terms vs match terms', () => {
+  test('without searchTerms, every term is queried', () => {
+    const matcher = createMatcher(COMPANIES);
+    const terms = matcher.queryTerms();
+
+    assert.includes(terms, 'CEBU RITEHOMES DEVELOPMENT & REALTY CORP.');
+    assert.includes(terms, '#Ritehomes');
+    assert.ok(terms.length >= 10, `expected the full term list, got ${terms.length}`);
+  });
+
+  test('searchTerms narrows what gets queried without touching matching', () => {
+    // YouTube's search.list costs 100 quota units per term per poll, so the
+    // query list has to be short even though the match list stays long.
+    const companies = COMPANIES.map((company) => ({
+      ...company,
+      searchTerms: company.id === 'cebu-ritehomes' ? ['Ritehomes'] : ['Roven Technic']
+    }));
+
+    const matcher = createMatcher(companies);
+    assert.deepEqual(matcher.queryTerms(), ['Ritehomes', 'Roven Technic']);
+
+    // Matching precision must be unchanged: the full registered name still
+    // resolves as a name-level hit, not as the shorter alias.
+    const result = matcher.match('Toured the CEBU RITEHOMES DEVELOPMENT & REALTY CORP. site');
+    assert.equal(result.companies[0].companyId, 'cebu-ritehomes');
+    assert.equal(result.companies[0].bestType, 'name');
+
+    // And hashtag-only mentions still match even though no hashtag is queried.
+    assert.ok(matcher.match('great work #RovenTechnic').matched);
+  });
+
+  test('searchTerms is per company, so one can opt in and the other not', () => {
+    const companies = [
+      { ...COMPANIES[0], searchTerms: ['Ritehomes'] },
+      COMPANIES[1]
+    ];
+
+    const terms = createMatcher(companies).queryTerms();
+
+    assert.includes(terms, 'Ritehomes');
+    assert.notOk(
+      terms.includes('CEBU RITEHOMES'),
+      'the overridden company must contribute only its searchTerms'
+    );
+    assert.includes(terms, 'ROVEN TECHNIC CONSTRUCTION');
+  });
+
+  test('empty or whitespace searchTerms falls back to the full list', () => {
+    const companies = COMPANIES.map((company) => ({ ...company, searchTerms: ['', '   '] }));
+    assert.ok(createMatcher(companies).queryTerms().length >= 10);
+  });
+});

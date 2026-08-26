@@ -11,6 +11,8 @@
         "Ritehomes Realty",
         "Ritehomes"
       ],
+      "$searchComment": "What to QUERY platform search APIs with. Matching still uses every term above - see src/core/matcher.js queryTerms().",
+      "searchTerms": ["Ritehomes"],
       "hashtags": ["#Ritehomes", "#CebuRitehomes", "#CebuRiteHomes"],
       "handles": ["@ritehomes", "@ceburitehomes"],
       "exclude": []
@@ -23,6 +25,7 @@
         "Roven Technic Construction",
         "Roven Construction"
       ],
+      "searchTerms": ["Roven Technic"],
       "hashtags": ["#RovenTechnic", "#RovenConstruction"],
       "handles": ["@roventechnic", "@roventechnic_official"],
       "exclude": []
@@ -32,7 +35,8 @@
   "monitoring": {
     "$comment": "frequency accepts a preset (realtime|1m|5m|15m|1h|12h), a duration (30s, 45m, 2h), a raw number of seconds, or cron:<5-field expression>.",
     "frequency": "5m",
-    "perPlatform": {},
+    "$quotaComment": "YouTube search.list costs 100 quota units per search term per poll, against a free 10000/day. Two search terms at 45m is ~6400 units/day, leaving headroom for comments and manual polls.",
+    "perPlatform": { "youtube": "45m" },
     "enabledPlatforms": ["facebook", "youtube", "tiktok", "instagram"],
     "lookbackMinutes": 120,
     "maxItemsPerPoll": 50,

@@ -317,15 +317,42 @@ export class Matcher {
     };
   }
 
-  /** Every configured term as plain strings - used to build API search queries. */
+  /**
+   * The terms to send to a platform's search API.
+   *
+   * Deliberately NOT the same as the terms used for matching. Querying every
+   * alias and hashtag is expensive and pointless: YouTube's search.list costs
+   * 100 quota units per term per poll against a 10,000/day allowance, so 13
+   * terms buys only 7 polls a day. And it is redundant - searching "Ritehomes"
+   * already returns videos naming "CEBU RITEHOMES DEVELOPMENT & REALTY CORP.",
+   * because platform search tokenises loosely.
+   *
+   * So a company may declare `searchTerms` - a short list of distinctive
+   * queries. Matching still runs against the full term list, so precision is
+   * unchanged; only the number of paid API calls drops. A company with no
+   * `searchTerms` falls back to all of its terms.
+   */
   queryTerms({ includeHandles = false } = {}) {
-    return [
-      ...new Set(
-        this.terms
-          .filter((entry) => includeHandles || entry.type !== 'handle')
-          .map((entry) => entry.term)
-      )
-    ];
+    const explicit = [];
+    const overridden = new Set();
+
+    for (const company of this.companies) {
+      const declared = (company.searchTerms || [])
+        .map((term) => String(term).trim())
+        .filter(Boolean);
+
+      if (declared.length === 0) continue;
+
+      overridden.add(company.id);
+      explicit.push(...declared);
+    }
+
+    const derived = this.terms
+      .filter((entry) => !overridden.has(entry.companyId))
+      .filter((entry) => includeHandles || entry.type !== 'handle')
+      .map((entry) => entry.term);
+
+    return [...new Set([...explicit, ...derived])];
   }
 }
 
