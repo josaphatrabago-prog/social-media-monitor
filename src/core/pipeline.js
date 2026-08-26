@@ -168,13 +168,15 @@ export class Pipeline extends EventEmitter {
 
     await Promise.allSettled(notifications);
 
-    if (summary.received > 0) {
-      log.info(
-        `${source}: ${summary.received} fetched, ${summary.matched} matched, ` +
-        `${summary.added} new, ${summary.duplicates} duplicate` +
-        (crisisEvent ? `, CRISIS (${crisisEvent.severity})` : '')
-      );
-    }
+    // Logged even when nothing came back. A poll that succeeds and finds
+    // nothing is the normal state for a brand with little coverage, and it has
+    // to be distinguishable from a poll that never ran - otherwise "quiet" and
+    // "broken" look identical in the journal.
+    log.info(
+      `${source}: ${summary.received} fetched, ${summary.matched} matched, ` +
+      `${summary.added} new, ${summary.duplicates} duplicate` +
+      (crisisEvent ? `, CRISIS (${crisisEvent.severity})` : '')
+    );
 
     this.emit('ingest', summary);
     return summary;
