@@ -9,13 +9,44 @@ const DEFAULT_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
+/**
+ * Query parameters that carry credentials. Platform APIs take secrets in the
+ * query string, so any error message quoting a URL verbatim writes the secret
+ * to the log - and these errors are logged by design.
+ */
+const SECRET_QUERY_PARAMS = /^(access_token|key|api_key|apikey|token|client_secret|password|auth)$/i;
+
+/** Replaces secret-bearing query values with a placeholder. */
+export function redactUrl(url) {
+  try {
+    const parsed = new URL(url);
+    let changed = false;
+
+    for (const name of [...parsed.searchParams.keys()]) {
+      if (!SECRET_QUERY_PARAMS.test(name)) continue;
+      parsed.searchParams.set(name, 'REDACTED');
+      changed = true;
+    }
+
+    return changed ? parsed.toString() : url;
+  } catch {
+    // Not a parseable URL; strip anything that looks like a token assignment.
+    return String(url).replace(
+      /\b(access_token|key|api_key|token|client_secret)=[^&\s]+/gi,
+      '$1=REDACTED'
+    );
+  }
+}
+
 export class HttpError extends Error {
   constructor(status, statusText, body, url) {
-    super(`HTTP ${status} ${statusText} for ${url}`);
+    super(`HTTP ${status} ${statusText} for ${redactUrl(url)}`);
     this.name = 'HttpError';
     this.status = status;
     this.body = body;
-    this.url = url;
+    // Kept redacted: this object is logged and serialised in places the raw
+    // URL has no business reaching.
+    this.url = redactUrl(url);
   }
 }
 
@@ -59,7 +90,9 @@ export async function request(url, options = {}) {
       }
     } catch (error) {
       const isAbort = error.name === 'AbortError';
-      lastError = isAbort ? new Error(`Request to ${url} timed out after ${timeoutMs}ms`) : error;
+      lastError = isAbort
+        ? new Error(`Request to ${redactUrl(url)} timed out after ${timeoutMs}ms`)
+        : error;
       if (error instanceof HttpError && !RETRYABLE_STATUS.has(error.status)) throw error;
       if (attempt === retries) throw lastError;
     } finally {

@@ -7,6 +7,7 @@ import { ConfigStore, loadEnvFile, validateConfig, DEFAULTS, deepMerge } from '.
 import { parseCron, isValidCron } from '../src/util/cron.js';
 import { parseFrequency, isValidFrequency, describeSeconds, MIN_INTERVAL_SECONDS } from '../src/util/frequency.js';
 import { toCsv } from '../src/util/csv.js';
+import { HttpError, redactUrl } from '../src/util/http.js';
 
 let counter = 0;
 
@@ -403,5 +404,35 @@ describe('csv export', () => {
     const csv = toCsv([{ a: null, b: undefined }, { a: { nested: true }, b: '' }], columns);
     assert.includes(csv, '\r\n,\r\n');
     assert.includes(csv, '"{""nested"":true}"');
+  });
+});
+
+describe('url redaction', () => {
+  test('secret query params are replaced in error messages', () => {
+    const url = 'https://graph.facebook.com/v21.0/123/feed?fields=id,message&limit=50&access_token=EAGW3yEZSECRET';
+    const error = new HttpError(400, 'Bad Request', '', url);
+
+    assert.notOk(error.message.includes('EAGW3yEZSECRET'), 'the token must not reach the message');
+    assert.includes(error.message, 'access_token=REDACTED');
+    assert.includes(error.message, 'fields=id%2Cmessage', 'non-secret params are preserved');
+    assert.notOk(error.url.includes('EAGW3yEZSECRET'), 'nor the stored url');
+  });
+
+  test('every known secret parameter name is covered', () => {
+    for (const name of ['access_token', 'key', 'api_key', 'token', 'client_secret', 'password']) {
+      const redacted = redactUrl(`https://example.invalid/x?${name}=SUPERSECRET&safe=1`);
+      assert.notOk(redacted.includes('SUPERSECRET'), `${name} should be redacted`);
+      assert.includes(redacted, 'safe=1');
+    }
+  });
+
+  test('a url with no secrets is returned unchanged', () => {
+    const clean = 'https://example.invalid/a?b=1&c=2';
+    assert.equal(redactUrl(clean), clean);
+  });
+
+  test('unparseable input still gets scrubbed', () => {
+    const scrubbed = redactUrl('not a url access_token=LEAKYVALUE trailing');
+    assert.notOk(scrubbed.includes('LEAKYVALUE'));
   });
 });
