@@ -38,6 +38,8 @@
     "$quotaComment": "YouTube search.list costs 100 quota units per search term per poll, against a free 10000/day. Two search terms at 45m is ~6400 units/day, leaving headroom for comments and manual polls.",
     "perPlatform": { "youtube": "45m" },
     "enabledPlatforms": ["facebook", "youtube", "tiktok", "instagram"],
+    "$backfillComment": "backfillMinutes applies only to a platform's FIRST poll, so connecting a source surfaces the history already there. lookbackMinutes governs steady state and caps recovery after downtime.",
+    "backfillMinutes": 525600,
     "lookbackMinutes": 120,
     "maxItemsPerPoll": 50,
     "mockMode": "auto",

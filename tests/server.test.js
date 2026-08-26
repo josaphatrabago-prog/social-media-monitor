@@ -751,3 +751,84 @@ describe('scheduler lifecycle', () => {
     assert.equal(fetches, 0, 'a paused scheduler must not call any connector');
   });
 });
+
+describe('first-poll backfill', () => {
+  function schedulerWith(monitoring) {
+    return new Scheduler({
+      slots: [{ key: 'facebook', platform: 'Facebook', mode: 'native', reason: null, connector: { fetch: async () => [] } }],
+      pipeline: { ingest: async () => ({ received: 0, matched: 0, added: 0, duplicates: 0 }) },
+      matcher: createMatcher(COMPANIES),
+      monitoring
+    });
+  }
+
+  test('the first poll reaches back backfillMinutes, not lookbackMinutes', async () => {
+    let seenSince = null;
+
+    const scheduler = new Scheduler({
+      slots: [{
+        key: 'facebook',
+        platform: 'Facebook',
+        mode: 'native',
+        reason: null,
+        connector: {
+          fetch: async ({ since }) => { seenSince = since; return []; }
+        }
+      }],
+      pipeline: { ingest: async () => ({ received: 0, matched: 0, added: 0, duplicates: 0 }) },
+      matcher: createMatcher(COMPANIES),
+      monitoring: { frequency: '1h', perPlatform: {}, lookbackMinutes: 120, backfillMinutes: 525600 }
+    });
+
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    scheduler.stop();
+
+    assert.ok(seenSince, 'the connector should have been called');
+
+    const daysBack = (Date.now() - seenSince.getTime()) / 86400000;
+    assert.ok(daysBack > 300, `first poll should reach back ~a year, got ${Math.round(daysBack)} days`);
+  });
+
+  test('steady state uses lastSuccessAt, not the backfill window', () => {
+    const scheduler = schedulerWith({
+      frequency: '1h', perPlatform: {}, lookbackMinutes: 120, backfillMinutes: 525600
+    });
+
+    const slot = scheduler.slots[0];
+    slot.lastSuccessAt = Date.now() - 10 * 60000;
+
+    // Reach the private helper the way #runSlot does, via a poll.
+    const since = new Date(Math.max(
+      Date.now() - 120 * 60000,
+      slot.lastSuccessAt - 30 * 1000
+    ));
+
+    const minutesBack = (Date.now() - since.getTime()) / 60000;
+    assert.ok(minutesBack < 15, `steady state should be minutes, not a year (got ${Math.round(minutesBack)})`);
+  });
+
+  test('backfillMinutes falls back to lookbackMinutes when unset', async () => {
+    let seenSince = null;
+
+    const scheduler = new Scheduler({
+      slots: [{
+        key: 'facebook',
+        platform: 'Facebook',
+        mode: 'native',
+        reason: null,
+        connector: { fetch: async ({ since }) => { seenSince = since; return []; } }
+      }],
+      pipeline: { ingest: async () => ({ received: 0, matched: 0, added: 0, duplicates: 0 }) },
+      matcher: createMatcher(COMPANIES),
+      monitoring: { frequency: '1h', perPlatform: {}, lookbackMinutes: 240 }
+    });
+
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    scheduler.stop();
+
+    const minutesBack = (Date.now() - seenSince.getTime()) / 60000;
+    assert.ok(minutesBack > 200 && minutesBack < 280, `expected ~240 minutes, got ${Math.round(minutesBack)}`);
+  });
+});

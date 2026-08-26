@@ -178,12 +178,22 @@ export class Scheduler extends EventEmitter {
 
   /** The window this poll should ask each connector for. */
   #sinceFor(slot) {
-    const lookbackMs = (this.monitoring.lookbackMinutes || 120) * 60 * 1000;
-    const lookbackFloor = Date.now() - lookbackMs;
+    // First poll for this platform: reach back far enough to find the history
+    // that already exists. Without this, connecting a Page with months of
+    // customer comments surfaces nothing until somebody posts again - the
+    // system looks broken precisely when it should be proving its worth.
+    if (!slot.lastSuccessAt) {
+      const backfillMinutes = this.monitoring.backfillMinutes ??
+        this.monitoring.lookbackMinutes ?? 120;
+      return new Date(Date.now() - backfillMinutes * 60 * 1000);
+    }
 
-    if (!slot.lastSuccessAt) return new Date(lookbackFloor);
-
+    // Steady state: from the last success, with a small overlap so an item
+    // written right on the boundary is not skipped. lookbackMinutes caps how
+    // far back a recovery after long downtime will reach.
+    const lookbackFloor = Date.now() - (this.monitoring.lookbackMinutes || 120) * 60 * 1000;
     const fromLastSuccess = slot.lastSuccessAt - OVERLAP_SECONDS * 1000;
+
     return new Date(Math.max(lookbackFloor, fromLastSuccess));
   }
 
