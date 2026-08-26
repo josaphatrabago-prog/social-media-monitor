@@ -3,13 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pulse Brand Monitor | Real-Time Social Media Listening & Alerting</title>
-  <meta name="description" content="Monitor company mentions, analyze real-time sentiment, and receive instant push, webhook, and email alerts.">
+  <title>Pulse Brand Monitor · Real-Time Social Listening</title>
+  <meta name="description" content="Real-time brand mention monitoring across Facebook, YouTube, TikTok and Instagram with sentiment analysis, crisis spike detection and multi-channel alerting.">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
 
-  <!-- App Header Navbar -->
   <header class="app-navbar">
     <div class="brand-title-group">
       <div class="brand-icon">⚡</div>
@@ -20,258 +19,333 @@
     </div>
 
     <div class="nav-actions">
-      <div class="stream-status-pill">
-        <span id="stream-status-dot" class="status-dot"></span>
-        <span id="stream-status-text">Live Monitoring Active</span>
+      <div class="stream-status-pill" id="connection-pill" title="Live event stream">
+        <span id="connection-dot" class="status-dot connecting"></span>
+        <span id="connection-text">Connecting…</span>
       </div>
 
-      <button id="btn-toggle-stream" class="btn btn-secondary btn-sm">Pause Monitor</button>
-      <button id="btn-open-settings" class="btn btn-secondary btn-sm">⚙️ Alert Rules</button>
-      <button id="btn-open-keywords" class="btn btn-primary btn-sm">🎯 Target Keywords</button>
+      <label class="inline-field" title="How often each platform is polled">
+        <span class="inline-field-label">Every</span>
+        <select id="frequency-select" class="filter-select">
+          <option value="realtime">Real-time (30s)</option>
+          <option value="1m">1 minute</option>
+          <option value="5m">5 minutes</option>
+          <option value="15m">15 minutes</option>
+          <option value="1h">1 hour</option>
+          <option value="12h">12 hours</option>
+          <option value="custom">Custom / cron…</option>
+        </select>
+      </label>
+
+      <button id="btn-poll-now" class="btn btn-secondary btn-sm" type="button">↻ Poll now</button>
+      <button id="btn-toggle-stream" class="btn btn-secondary btn-sm" type="button">Pause</button>
+      <button id="btn-open-settings" class="btn btn-secondary btn-sm" type="button">⚙️ Alerts</button>
+      <button id="btn-open-brands" class="btn btn-primary btn-sm" type="button">🎯 Brands</button>
     </div>
   </header>
 
-  <!-- Main Dashboard Layout -->
+  <!-- Shown only while a negative-mention spike is active. -->
+  <div id="crisis-banner" class="crisis-banner" role="alert" hidden>
+    <div class="crisis-banner-main">
+      <span class="crisis-banner-icon">🔥</span>
+      <div>
+        <div class="crisis-banner-title" id="crisis-banner-title">Crisis alert</div>
+        <div class="crisis-banner-detail" id="crisis-banner-detail"></div>
+      </div>
+    </div>
+    <div class="crisis-banner-actions">
+      <button id="btn-crisis-filter" class="btn btn-secondary btn-sm" type="button">Show negatives</button>
+      <button id="btn-crisis-ack" class="btn btn-danger btn-sm" type="button">Acknowledge</button>
+    </div>
+  </div>
+
+  <div id="mock-banner" class="notice-banner" hidden>
+    <span>🧪</span>
+    <div>
+      <strong>Demo mode — synthetic data.</strong>
+      No platform credentials were found, so mentions are generated locally to
+      exercise the pipeline. Add API keys to <code>.env</code> for live monitoring.
+    </div>
+    <button id="btn-simulate-crisis" class="btn btn-secondary btn-sm" type="button">Simulate crisis spike</button>
+  </div>
+
   <main class="dashboard-grid">
-    
-    <!-- Left Column: Feed & Primary Controls -->
+
     <section>
-      
-      <!-- Metrics Overview Header -->
       <div class="metrics-row">
         <div class="metric-card">
-          <div class="metric-title">Total Mentions</div>
+          <div class="metric-title">Total mentions</div>
           <div class="metric-value-group">
-            <div id="stat-total-mentions" class="metric-number">0</div>
-            <span class="metric-change up">↑ Live</span>
+            <div id="stat-total" class="metric-number">0</div>
+            <span id="stat-total-delta" class="metric-change">—</span>
           </div>
         </div>
 
         <div class="metric-card">
-          <div class="metric-title">Positive Sentiment</div>
+          <div class="metric-title">Positive</div>
           <div class="metric-value-group">
-            <div id="stat-pos-percent" class="metric-number">0%</div>
-            <span class="metric-change up">🟢 Good</span>
+            <div id="stat-positive" class="metric-number">0%</div>
+            <span id="stat-positive-count" class="metric-change up">0 mentions</span>
           </div>
         </div>
 
         <div class="metric-card">
-          <div class="metric-title">Negative Sentiment</div>
+          <div class="metric-title">Negative</div>
           <div class="metric-value-group">
-            <div id="stat-neg-percent" class="metric-number">0%</div>
-            <span class="metric-change down">🔴 Watch</span>
+            <div id="stat-negative" class="metric-number">0%</div>
+            <span id="stat-negative-count" class="metric-change down">0 mentions</span>
           </div>
         </div>
 
-        <div class="metric-card">
-          <div class="metric-title">Crisis Spikes (5m)</div>
+        <div class="metric-card" id="crisis-metric-card">
+          <div class="metric-title">Crisis window</div>
           <div class="metric-value-group">
-            <div id="stat-crisis-count" class="metric-number">0</div>
-            <span id="stat-crisis-badge" class="metric-change">Normal</span>
+            <div id="stat-crisis" class="metric-number">0<span class="metric-suffix" id="stat-crisis-threshold">/5</span></div>
+            <span id="stat-crisis-label" class="metric-change">Normal</span>
           </div>
         </div>
       </div>
 
-      <!-- Mention Feed Panel -->
       <div class="panel-card">
         <div class="panel-header">
-          <div class="panel-title">
-            <span>📡 Real-Time Mention Stream</span>
-          </div>
-
-          <div style="display: flex; gap: 0.5rem;">
-            <button id="btn-export-csv" class="btn btn-secondary btn-sm">📥 Export CSV</button>
-            <button id="btn-clear-feed" class="btn btn-secondary btn-sm">Clear Feed</button>
+          <div class="panel-title"><span>📡 Live mention stream</span></div>
+          <div class="panel-actions">
+            <button id="btn-export-csv" class="btn btn-secondary btn-sm" type="button">↓ CSV</button>
+            <button id="btn-export-json" class="btn btn-secondary btn-sm" type="button">↓ JSON</button>
+            <button id="btn-clear-feed" class="btn btn-secondary btn-sm" type="button">Clear</button>
           </div>
         </div>
 
-        <!-- Search & Filter Toolbar -->
         <div class="toolbar-row">
           <div class="search-box">
             <span class="search-icon">🔍</span>
-            <input type="text" id="search-input" placeholder="Search mentions by keyword, author, or content...">
+            <label class="visually-hidden" for="filter-search">Search mentions</label>
+            <input type="search" id="filter-search" placeholder="Search text, author or matched term…" autocomplete="off">
           </div>
 
+          <label class="visually-hidden" for="filter-company">Filter by brand</label>
+          <select id="filter-company" class="filter-select">
+            <option value="all">All brands</option>
+          </select>
+
+          <label class="visually-hidden" for="filter-platform">Filter by platform</label>
           <select id="filter-platform" class="filter-select">
-            <option value="all">All Platforms</option>
+            <option value="all">All platforms</option>
             <option value="Facebook">Facebook</option>
             <option value="YouTube">YouTube</option>
             <option value="TikTok">TikTok</option>
             <option value="Instagram">Instagram</option>
-            <option value="X">X (Twitter)</option>
-            <option value="Reddit">Reddit</option>
-            <option value="News">News / Web</option>
           </select>
 
+          <label class="visually-hidden" for="filter-sentiment">Filter by sentiment</label>
           <select id="filter-sentiment" class="filter-select">
-            <option value="all">All Sentiments</option>
-            <option value="positive">Positive Only</option>
-            <option value="neutral">Neutral Only</option>
-            <option value="negative">Negative Only</option>
+            <option value="all">All sentiment</option>
+            <option value="positive">Positive</option>
+            <option value="neutral">Neutral</option>
+            <option value="negative">Negative</option>
           </select>
         </div>
 
-        <!-- Feed List Container -->
-        <div id="mention-feed" class="feed-container">
-          <!-- Mention cards injected dynamically via app.js -->
+        <div class="feed-meta">
+          <span id="feed-count">No mentions</span>
+          <button id="btn-load-more" class="link-button" type="button" hidden>Load more</button>
         </div>
+
+        <div id="mention-feed" class="feed-container" aria-live="polite" aria-busy="true"></div>
       </div>
     </section>
 
-    <!-- Right Column: Sidebar, Setup & Analytics -->
     <aside class="sidebar-panel">
-      
-      <!-- Company Profile & Keyword Summary Card -->
+
       <div class="panel-card">
         <div class="panel-header">
-          <h3 class="panel-title">🏢 Tracked Brand</h3>
-          <button id="btn-edit-company-inline" class="btn btn-secondary btn-sm">Edit</button>
+          <h3 class="panel-title">🏢 Tracked brands</h3>
+          <button id="btn-edit-brands" class="btn btn-secondary btn-sm" type="button">Edit</button>
         </div>
-
-        <div style="margin-bottom: 0.8rem;">
-          <div style="font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase;">Company Name</div>
-          <div id="sidebar-company-name" style="font-weight: 700; font-size: 1.1rem; color: var(--accent-cyan);">Acme Corp</div>
-        </div>
-
-        <div>
-          <div style="font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.4rem;">Monitored Keywords</div>
-          <div id="sidebar-keywords-list" style="display: flex; flex-wrap: wrap; gap: 0.4rem;">
-            <!-- Keyword badges injected here -->
-          </div>
-        </div>
+        <div id="brand-summary"></div>
       </div>
 
-      <!-- Active Notification Channels Card -->
       <div class="panel-card">
         <div class="panel-header">
-          <h3 class="panel-title">🔔 Alert Channels</h3>
+          <h3 class="panel-title">🛰️ Platform status</h3>
+        </div>
+        <div id="platform-status"></div>
+      </div>
+
+      <div class="panel-card">
+        <div class="panel-header">
+          <h3 class="panel-title">🔔 Alert channels</h3>
         </div>
 
         <div class="setting-group">
           <label class="toggle-switch">
-            <span class="toggle-switch-text">Browser Desktop Push</span>
-            <input type="checkbox" id="toggle-browser-push" class="switch-input">
+            <span class="toggle-switch-text">Desktop notifications</span>
+            <input type="checkbox" id="toggle-desktop" class="switch-input">
             <span class="switch-slider"></span>
           </label>
+          <p class="setting-hint" id="desktop-hint">Requires browser permission.</p>
         </div>
 
         <div class="setting-group">
           <label class="toggle-switch">
-            <span class="toggle-switch-text">Audio Alert Chime</span>
-            <input type="checkbox" id="toggle-audio-alert" class="switch-input" checked>
+            <span class="toggle-switch-text">Audio alerts</span>
+            <input type="checkbox" id="toggle-sound" class="switch-input" checked>
             <span class="switch-slider"></span>
           </label>
         </div>
 
-        <div class="setting-group">
-          <label class="toggle-switch">
-            <span class="toggle-switch-text">Webhook Dispatch</span>
-            <input type="checkbox" id="toggle-webhook" class="switch-input">
-            <span class="switch-slider"></span>
-          </label>
-        </div>
+        <div id="channel-list" class="channel-list"></div>
 
-        <button id="btn-test-webhook" class="btn btn-secondary btn-sm" style="width: 100%; justify-content: center;">
-          🚀 Dispatch Test Webhook
-        </button>
-      </div>
-
-      <!-- Analytics: Platform Breakdown Card -->
-      <div class="panel-card">
-        <div class="panel-header">
-          <h3 class="panel-title">📊 Platform Share</h3>
-        </div>
-        <div id="platform-breakdown-list">
-          <!-- Rendered via analytics.js -->
+        <div class="button-row">
+          <button id="btn-test-mention" class="btn btn-secondary btn-sm" type="button">Test mention alert</button>
+          <button id="btn-test-crisis" class="btn btn-secondary btn-sm" type="button">Test crisis alert</button>
         </div>
       </div>
 
-      <!-- Analytics: Volume Trend Chart -->
       <div class="panel-card">
         <div class="panel-header">
-          <h3 class="panel-title">📈 Mention Activity</h3>
+          <h3 class="panel-title">🥧 Sentiment breakdown</h3>
         </div>
-        <div id="volume-chart-bars" class="chart-container">
-          <!-- Rendered via analytics.js -->
+        <div id="sentiment-chart" class="donut-container"></div>
+      </div>
+
+      <div class="panel-card">
+        <div class="panel-header">
+          <h3 class="panel-title">📊 Platform share</h3>
         </div>
+        <div id="platform-chart"></div>
+      </div>
+
+      <div class="panel-card">
+        <div class="panel-header">
+          <h3 class="panel-title">📈 Mention activity</h3>
+          <label class="visually-hidden" for="timeline-range">Timeline range</label>
+          <select id="timeline-range" class="filter-select filter-select-sm">
+            <option value="5">Last 2 hours</option>
+            <option value="15" selected>Last 6 hours</option>
+            <option value="60">Last 24 hours</option>
+            <option value="180">Last 3 days</option>
+          </select>
+        </div>
+        <div id="volume-chart" class="volume-container"></div>
+      </div>
+
+      <div class="panel-card">
+        <div class="panel-header">
+          <h3 class="panel-title">📜 Recent alerts</h3>
+        </div>
+        <div id="alert-log" class="alert-log"></div>
       </div>
     </aside>
   </main>
 
-  <!-- Modal: Target Company & Keywords Setup -->
-  <div id="modal-keywords" class="modal-overlay">
-    <div class="modal-container">
+  <!-- Brands / keywords -->
+  <div id="modal-brands" class="modal-overlay">
+    <div class="modal-container modal-wide" role="dialog" aria-modal="true" aria-labelledby="modal-brands-title">
       <div class="modal-header">
-        <h2 class="modal-title">🎯 Configure Tracked Keywords</h2>
-        <button id="btn-close-modal-keywords" class="modal-close">✕</button>
+        <h2 class="modal-title" id="modal-brands-title">🎯 Monitored brands &amp; keywords</h2>
+        <button class="modal-close" data-close-modal="modal-brands" type="button" aria-label="Close">✕</button>
       </div>
 
-      <div class="setting-group">
-        <label class="setting-label">Primary Company / Brand Name</label>
-        <input type="text" id="input-company-name" class="setting-input" placeholder="e.g. Acme Corp">
-      </div>
+      <p class="modal-intro">
+        Every term below is matched with punctuation and spacing tolerance, on word
+        boundaries. Excluded terms suppress a match for that brand only.
+      </p>
 
-      <div class="setting-group">
-        <label class="setting-label">Brand Aliases & Key Terms (Press Enter to add)</label>
-        <div class="keywords-tag-container" id="container-brand-aliases">
-          <input type="text" id="input-new-alias" class="keyword-input-inline" placeholder="Add brand alias...">
+      <div id="brand-editor"></div>
+
+      <div class="modal-footer">
+        <label class="checkbox-row">
+          <input type="checkbox" id="brands-persist" checked>
+          <span>Save to <code>config.json</code></span>
+        </label>
+        <div class="button-row">
+          <button class="btn btn-secondary" data-close-modal="modal-brands" type="button">Cancel</button>
+          <button id="btn-save-brands" class="btn btn-primary" type="button">Save brands</button>
         </div>
-      </div>
-
-      <div class="setting-group">
-        <label class="setting-label">Excluded Words / False Positives (Press Enter to add)</label>
-        <div class="keywords-tag-container" id="container-excluded-words">
-          <input type="text" id="input-new-excluded" class="keyword-input-inline" placeholder="Add excluded term...">
-        </div>
-      </div>
-
-      <div class="setting-group">
-        <label class="setting-label">Poll / Check Frequency (Seconds)</label>
-        <input type="number" id="input-check-interval" class="setting-input" value="5" min="2" max="60">
-      </div>
-
-      <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;">
-        <button id="btn-cancel-keywords" class="btn btn-secondary">Cancel</button>
-        <button id="btn-save-keywords" class="btn btn-primary">Save Rules</button>
       </div>
     </div>
   </div>
 
-  <!-- Modal: Alert & Webhook Settings -->
+  <!-- Alerting / thresholds -->
   <div id="modal-settings" class="modal-overlay">
-    <div class="modal-container">
+    <div class="modal-container" role="dialog" aria-modal="true" aria-labelledby="modal-settings-title">
       <div class="modal-header">
-        <h2 class="modal-title">⚙️ Notification & Webhook Rules</h2>
-        <button id="btn-close-modal-settings" class="modal-close">✕</button>
+        <h2 class="modal-title" id="modal-settings-title">⚙️ Alerting &amp; thresholds</h2>
+        <button class="modal-close" data-close-modal="modal-settings" type="button" aria-label="Close">✕</button>
       </div>
 
+      <h4 class="settings-section-title">Monitoring frequency</h4>
       <div class="setting-group">
-        <label class="setting-label">Slack / Discord / Custom Webhook URL</label>
-        <input type="text" id="input-webhook-url" class="setting-input" placeholder="https://hooks.slack.com/services/... or Discord Webhook">
-        <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; display: block;">
-          Supports Slack Webhooks, Discord Webhooks, Zapier, or standard JSON API endpoints.
-        </span>
+        <label class="setting-label" for="input-frequency">Frequency (preset, duration, seconds or cron)</label>
+        <input type="text" id="input-frequency" class="setting-input" placeholder="5m, 45s, 90, or cron:*/10 * * * *">
+        <p class="setting-hint">
+          Presets: realtime, 1m, 5m, 15m, 1h, 12h. Minimum interval is 10 seconds.
+          Cron uses 5 fields, e.g. <code>cron:0 9 * * MON-FRI</code>.
+        </p>
       </div>
 
-      <div class="setting-group">
-        <label class="setting-label">Crisis Alert Trigger Threshold</label>
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-          <input type="number" id="input-crisis-threshold" class="setting-input" value="3" min="1" max="20" style="width: 100px;">
-          <span style="font-size: 0.85rem; color: var(--text-secondary);">Negative mentions in 5-minute window</span>
+      <h4 class="settings-section-title">Crisis detection</h4>
+      <div class="setting-grid">
+        <div class="setting-group">
+          <label class="setting-label" for="input-crisis-window">Sliding window (minutes)</label>
+          <input type="number" id="input-crisis-window" class="setting-input" min="1" max="1440">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="input-crisis-threshold">Negative mentions to trigger</label>
+          <input type="number" id="input-crisis-threshold" class="setting-input" min="1" max="500">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="input-crisis-multiplier">Spike multiplier vs baseline</label>
+          <input type="number" id="input-crisis-multiplier" class="setting-input" min="1" max="50" step="0.5">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="input-crisis-cooldown">Cooldown (minutes)</label>
+          <input type="number" id="input-crisis-cooldown" class="setting-input" min="0" max="1440">
         </div>
       </div>
 
-      <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;">
-        <button id="btn-cancel-settings" class="btn btn-secondary">Cancel</button>
-        <button id="btn-save-settings" class="btn btn-primary">Save Settings</button>
+      <h4 class="settings-section-title">Sentiment thresholds</h4>
+      <div class="setting-grid">
+        <div class="setting-group">
+          <label class="setting-label" for="input-sentiment-positive">Positive at or above</label>
+          <input type="number" id="input-sentiment-positive" class="setting-input" step="0.5">
+        </div>
+        <div class="setting-group">
+          <label class="setting-label" for="input-sentiment-negative">Negative at or below</label>
+          <input type="number" id="input-sentiment-negative" class="setting-input" step="0.5">
+        </div>
+      </div>
+
+      <h4 class="settings-section-title">Channels</h4>
+      <div class="setting-group">
+        <label class="toggle-switch">
+          <span class="toggle-switch-text">Push desktop alerts from the server</span>
+          <input type="checkbox" id="toggle-desktop-channel" class="switch-input">
+          <span class="switch-slider"></span>
+        </label>
+      </div>
+      <div id="webhook-settings"></div>
+      <p class="setting-hint">
+        Webhook URLs, SMTP credentials and recipients are read from <code>.env</code>
+        and never sent to the browser. Toggle a channel here; set its URL there.
+      </p>
+
+      <div class="modal-footer">
+        <label class="checkbox-row">
+          <input type="checkbox" id="settings-persist" checked>
+          <span>Save to <code>config.json</code></span>
+        </label>
+        <div class="button-row">
+          <button class="btn btn-secondary" data-close-modal="modal-settings" type="button">Cancel</button>
+          <button id="btn-save-settings" class="btn btn-primary" type="button">Apply settings</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- Toast Notifications Container -->
-  <div id="toast-container"></div>
+  <div id="toast-container" aria-live="polite"></div>
 
-  <!-- Main JavaScript Bundle -->
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

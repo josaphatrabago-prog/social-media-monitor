@@ -233,6 +233,72 @@ export function createApi(context) {
       };
     },
 
+    /**
+     * Enables or disables one channel.
+     *
+     * A dedicated route rather than PATCH /api/config because the dashboard
+     * only ever sees *redacted* config. Letting it send a webhook array back
+     * would write "http...xy" over the raw "env:SLACK_WEBHOOK_URL" placeholder
+     * and permanently break that channel. Here the patch is rebuilt from the
+     * raw config, so URLs are never in play.
+     */
+    'POST /api/channels/toggle': ({ body }) => {
+      const { kind, name, enabled, persist } = body || {};
+
+      if (typeof enabled !== 'boolean') {
+        const error = new Error('body.enabled must be true or false');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const rawNotifications = configStore.raw.notifications;
+      let patch;
+
+      if (kind === 'desktop') {
+        patch = { notifications: { desktop: { ...rawNotifications.desktop, enabled } } };
+      } else if (kind === 'email') {
+        patch = { notifications: { email: { ...rawNotifications.email, enabled } } };
+      } else if (kind === 'webhook') {
+        const webhooks = rawNotifications.webhooks || [];
+        const target = webhooks.find((hook) => (hook.name || hook.type) === name);
+
+        if (!target) {
+          const error = new Error(`no webhook named "${name}"`);
+          error.statusCode = 404;
+          throw error;
+        }
+
+        patch = {
+          notifications: {
+            webhooks: webhooks.map((hook) => (hook === target ? { ...hook, enabled } : hook))
+          }
+        };
+      } else {
+        const error = new Error('body.kind must be desktop, email or webhook');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      configStore.update(patch);
+      if (persist) configStore.save();
+      dispatcher.reconfigure(configStore.get());
+
+      return {
+        kind,
+        name: name || kind,
+        enabled,
+        persisted: Boolean(persist),
+        channels: {
+          mention: dispatcher.channelsFor(['mention.any', 'mention.negative'])
+            .map(({ kind: channelKind, name: channelName, ready, reason }) =>
+              ({ kind: channelKind, name: channelName, ready, reason })),
+          crisis: dispatcher.channelsFor(['crisis'])
+            .map(({ kind: channelKind, name: channelName, ready, reason }) =>
+              ({ kind: channelKind, name: channelName, ready, reason }))
+        }
+      };
+    },
+
     'POST /api/notify/test': async ({ body }) => {
       const kind = body?.kind === 'crisis' ? 'crisis' : 'mention';
       const result = await dispatcher.test(kind);

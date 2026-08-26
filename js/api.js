@@ -112,6 +112,16 @@ export const api = {
     body: JSON.stringify(patch)
   }),
 
+  /**
+   * Toggles one channel. Deliberately not part of patchConfig: the browser only
+   * ever holds redacted config, so sending a webhook list back would overwrite
+   * the server's env-var placeholders with masked strings.
+   */
+  toggleChannel: (kind, name, enabled, persist = true) => request('/api/channels/toggle', {
+    method: 'POST',
+    body: JSON.stringify({ kind, name, enabled, persist })
+  }),
+
   testNotification: (kind) => request('/api/notify/test', {
     method: 'POST',
     body: JSON.stringify({ kind })
