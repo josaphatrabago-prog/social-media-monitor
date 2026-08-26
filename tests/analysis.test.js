@@ -282,3 +282,67 @@ describe('search terms vs match terms', () => {
     assert.ok(createMatcher(companies).queryTerms().length >= 10);
   });
 });
+
+describe('real-world false positives', () => {
+  /**
+   * "Ritehomes.com real estate group" is an unrelated US company with ~118
+   * YouTube videos. Searching the bare alias "Ritehomes" returns all of them,
+   * and every title matched the Cebu client before the exclusion was added -
+   * filing another continent's marketing as client mentions.
+   */
+  const OTHER_COMPANY_TITLES = [
+    'Ritehomes.com Virtual Agent',
+    'Ritehomes.com Culture',
+    'How To Buy a Home With Ritehomes.com Explained',
+    'Who we are by Ritehomes.com',
+    'Ritehomes.com the agents who gives back.'
+  ];
+
+  const CONFIGURED = [
+    {
+      id: 'cebu-ritehomes',
+      name: 'CEBU RITEHOMES DEVELOPMENT & REALTY CORP.',
+      aliases: ['CEBU RITEHOMES', 'Cebu Rite Homes', 'Ritehomes Realty', 'Ritehomes'],
+      hashtags: ['#Ritehomes'],
+      handles: [],
+      exclude: ['Ritehomes.com']
+    }
+  ];
+
+  test('the unrelated US company is excluded', () => {
+    const matcher = createMatcher(CONFIGURED);
+
+    for (const title of OTHER_COMPANY_TITLES) {
+      assert.notOk(matcher.match(title).matched, `should reject: ${title}`);
+    }
+  });
+
+  test('genuine local mentions still match despite the exclusion', () => {
+    const matcher = createMatcher(CONFIGURED);
+
+    const genuine = [
+      'Site tour at CEBU RITEHOMES DEVELOPMENT & REALTY CORP. today',
+      'Nindot kaayo ang Ritehomes subdivision sa Mandaue',
+      'Bought a unit from Cebu Rite Homes last year',
+      'Walang update from Ritehomes, 8 months na'
+    ];
+
+    for (const text of genuine) {
+      const result = matcher.match(text);
+      assert.ok(result.matched, `should match: ${text}`);
+      assert.equal(result.companies[0].companyId, 'cebu-ritehomes');
+    }
+  });
+
+  test('the exclusion is scoped to the company that declares it', () => {
+    const matcher = createMatcher([
+      ...CONFIGURED,
+      { id: 'roven-technic', name: 'ROVEN TECHNIC CONSTRUCTION', aliases: [], exclude: [] }
+    ]);
+
+    // One post naming both: Ritehomes is suppressed, Roven Technic is not.
+    const result = matcher.match('Compared Ritehomes.com with ROVEN TECHNIC CONSTRUCTION');
+    assert.equal(result.primaryCompanyId, 'roven-technic');
+    assert.notOk(result.companies.some((entry) => entry.companyId === 'cebu-ritehomes'));
+  });
+});

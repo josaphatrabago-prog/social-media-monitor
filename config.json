@@ -12,10 +12,10 @@
         "Ritehomes"
       ],
       "$searchComment": "What to QUERY platform search APIs with. Matching still uses every term above - see src/core/matcher.js queryTerms().",
-      "searchTerms": ["Ritehomes"],
+      "searchTerms": ["Cebu Ritehomes"],
       "hashtags": ["#Ritehomes", "#CebuRitehomes", "#CebuRiteHomes"],
       "handles": ["@ritehomes", "@ceburitehomes"],
-      "exclude": []
+      "exclude": ["Ritehomes.com"]
     },
     {
       "id": "roven-technic",
@@ -25,7 +25,7 @@
         "Roven Technic Construction",
         "Roven Construction"
       ],
-      "searchTerms": ["Roven Technic"],
+      "searchTerms": ["Roven Technic Construction"],
       "hashtags": ["#RovenTechnic", "#RovenConstruction"],
       "handles": ["@roventechnic", "@roventechnic_official"],
       "exclude": []
