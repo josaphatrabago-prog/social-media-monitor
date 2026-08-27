@@ -14,6 +14,7 @@ import { buildCrisisEmail, buildMentionEmail } from '../src/notify/email.js';
 import { buildMessage } from '../src/notify/smtp.js';
 import { createConnectors } from '../src/platforms/index.js';
 import { MockConnector } from '../src/platforms/mock.js';
+import { PlatformConnector } from '../src/platforms/base.js';
 import { YouTubeConnector } from '../src/platforms/youtube.js';
 import { readField } from '../src/platforms/aggregator.js';
 import { DEFAULTS, deepMerge } from '../src/config.js';
@@ -688,5 +689,57 @@ describe('connectors', () => {
     assert.equal(readField(item, {}, 'authorName'), 'Jane', 'falls back to user.name');
     assert.equal(readField(item, {}, 'likes'), 4);
     assert.equal(readField(item, {}, 'views'), undefined, 'absent fields stay undefined');
+  });
+});
+
+describe('a wholly failed poll must not look healthy', () => {
+  /** A connector stub whose sub-requests all fail, as an expired token would. */
+  class AllFailingConnector extends PlatformConnector {
+    static platform = 'Test';
+    static key = 'test';
+
+    async fetchWithGuard(items) {
+      return this.mapLimited(items, 2, async () => {
+        throw new Error('HTTP 400 Bad Request');
+      }, { throwIfAllFail: true });
+    }
+
+    async fetchWithoutGuard(items) {
+      return this.mapLimited(items, 2, async () => {
+        throw new Error('HTTP 400 Bad Request');
+      });
+    }
+
+    async fetchPartial(items) {
+      let first = true;
+      return this.mapLimited(items, 1, async (item) => {
+        if (first) { first = false; return [{ ok: item }]; }
+        throw new Error('HTTP 400 Bad Request');
+      }, { throwIfAllFail: true });
+    }
+  }
+
+  const connector = new AllFailingConnector({ settings: {}, monitoring: {}, matcher: null });
+
+  test('throws when every source fails', async () => {
+    await assert.rejects(
+      connector.fetchWithGuard(['a', 'b', 'c']),
+      'all 3 source(s) failed',
+      'a totally broken platform must surface as an error'
+    );
+  });
+
+  test('stays quiet without the guard, for optional extras', async () => {
+    const result = await connector.fetchWithoutGuard(['a', 'b']);
+    assert.deepEqual(result, [], 'comments being disabled is not a poll failure');
+  });
+
+  test('partial success is still success', async () => {
+    const result = await connector.fetchPartial(['a', 'b', 'c']);
+    assert.equal(result.length, 1, 'one good source is enough to keep the poll');
+  });
+
+  test('no sources at all is not a failure', async () => {
+    assert.deepEqual(await connector.fetchWithGuard([]), []);
   });
 });

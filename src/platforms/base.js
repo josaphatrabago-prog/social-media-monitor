@@ -140,8 +140,9 @@ export class PlatformConnector {
    * a search page can be dozens of requests; firing them all at once is the
    * fastest way to hit a rate limit.
    */
-  async mapLimited(items, limit, task) {
+  async mapLimited(items, limit, task, { throwIfAllFail = false } = {}) {
     const results = [];
+    const failures = [];
     let cursor = 0;
 
     const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -151,12 +152,31 @@ export class PlatformConnector {
         try {
           results.push(await task(items[index], index));
         } catch (error) {
+          failures.push(error);
           this.log.warn(`sub-request failed: ${error.message}`);
         }
       }
     });
 
     await Promise.all(workers);
+
+    /**
+     * When every source failed, returning an empty array would report the poll
+     * as a healthy "nothing new" - so an expired token or revoked permission
+     * shows up on the dashboard as a working platform with no mentions. For
+     * calls where the sub-requests ARE the data source, that has to surface as
+     * a failure instead.
+     *
+     * Not the default: a connector that fans out for optional extras (YouTube
+     * comments, which are often disabled) should keep the items it did get.
+     */
+    if (throwIfAllFail && items.length > 0 && failures.length === items.length) {
+      const first = failures[0];
+      throw new Error(
+        `all ${items.length} source(s) failed - first error: ${first.message}`
+      );
+    }
+
     return results.flat().filter(Boolean);
   }
 }

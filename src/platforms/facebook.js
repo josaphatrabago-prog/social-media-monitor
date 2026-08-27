@@ -74,7 +74,11 @@ export class FacebookConnector extends PlatformConnector {
     const pageItems = await this.mapLimited(
       pageIds,
       SUB_REQUEST_CONCURRENCY,
-      (pageId) => this.#fetchPage(pageId, sinceUnix, token)
+      (pageId) => this.#fetchPage(pageId, sinceUnix, token),
+      // These feeds are the whole data source here: if every one fails, the
+      // token or its permissions are broken and that must not be reported as
+      // a clean poll with no results.
+      { throwIfAllFail: true }
     );
 
     const groupItems = await this.mapLimited(
